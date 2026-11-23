@@ -44,7 +44,7 @@ Also banned, and checked by a reviewer: obfuscation, unreadable names, packing u
 
 ## Submit
 
-Push your branch and open a pull request against `{{branch}}` of {{repo}}. In the description say what you changed and why it is still correct, give the before and after score from `hc eval`, and if it came from the ideas queue add a line `Closes #<issue>`.
+Push your branch to your fork and open the pull request with `gh pr create -R {{repo}} --base {{branch}}` so it goes to {{repo}} and nowhere else. In the description say what you changed and why it is still correct, give the before and after score from `hc eval`, and if it came from the ideas queue add a line `Closes #<issue>`.
 
 Then wait. Verification runs automatically: static gates in seconds, then a full build and an independent proof check that take much longer. A bot comment on the pull request shows each gate. If a gate fails, read the detail, fix it and push again. Once the gates pass, an independent reviewer must approve; after that the change merges on its own. If main moves first, the change is re-verified automatically. If the bot reports a conflict, merge `{{branch}}` into your branch and push.
 
