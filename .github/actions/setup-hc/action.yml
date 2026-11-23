@@ -1,0 +1,24 @@
+name: Set up hc
+description: Build the hc command from this repository at the ref the action was called with and put it on PATH.
+runs:
+  using: composite
+  steps:
+    - id: src
+      shell: bash
+      run: |
+        root="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)"
+        echo "root=$root" >> "$GITHUB_OUTPUT"
+        echo "hash=$(cat "$root/Cargo.lock" "$root"/crates/*/Cargo.toml | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          ${{ steps.src.outputs.root }}/target
+        key: hc-${{ runner.os }}-${{ steps.src.outputs.hash }}
+    - shell: bash
+      run: |
+        cargo build --release --locked --manifest-path "${{ steps.src.outputs.root }}/Cargo.toml" -p hc-cli
+        mkdir -p "$HOME/.local/bin"
+        cp "${{ steps.src.outputs.root }}/target/release/hc" "$HOME/.local/bin/hc"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"

@@ -1,0 +1,152 @@
+{
+  "deny": [
+    {
+      "description": "`sorry` or `admit` (unfinished proofs).",
+      "mode": "forbid",
+      "name": "sorry"
+    },
+    {
+      "description": "New axioms.",
+      "mode": "forbid",
+      "name": "axiom"
+    },
+    {
+      "description": "`native_decide` and other ways of trusting compiled code instead of the proof kernel.",
+      "mode": "forbid",
+      "name": "native evaluation"
+    },
+    {
+      "description": "`unsafe`, `implemented_by`, `extern`, `opaque` and similar escape hatches.",
+      "mode": "forbid",
+      "name": "escape hatches"
+    },
+    {
+      "description": "Code that runs during compilation (`#eval`, `run_cmd`, `elab`, `initialize`).",
+      "mode": "forbid",
+      "name": "compile-time code"
+    },
+    {
+      "description": "More macros, syntax or notation than there are today (no private shorthand languages).",
+      "mode": "no_increase",
+      "name": "macros and notation"
+    },
+    {
+      "description": "More `maxHeartbeats` overrides than there are today, or any above 4,000,000.",
+      "mode": "no_increase",
+      "name": "maxHeartbeats"
+    },
+    {
+      "description": "More raised resource limits (`maxRecDepth`, `synthInstance.maxSize`, `exponentiation.threshold`) than there are today.",
+      "mode": "no_increase",
+      "name": "resource limits"
+    }
+  ],
+  "frozen": [
+    "vp-vnp/Statement.lean",
+    "vp-vnp/Challenge.lean",
+    "vp-vnp/comparator.json",
+    "vp-vnp/lean-toolchain",
+    "vp-vnp/lakefile.toml",
+    "vp-vnp/lake-manifest.json",
+    "vp-vnp/scripts",
+    "hillclimb.toml",
+    ".github"
+  ],
+  "gates": [
+    {
+      "description": "The statement of the theorems, the toolchain, the dependency pins and the harness configuration must be byte-identical to the main branch.",
+      "key": "frozen",
+      "label": "Frozen files untouched"
+    },
+    {
+      "description": "Only files inside the project directory may change.",
+      "key": "scope",
+      "label": "Changes stay in scope"
+    },
+    {
+      "description": "No new axioms, no unchecked native evaluation, no escape hatches, no private macro languages, no raised resource limits.",
+      "key": "deny",
+      "label": "No banned constructs"
+    },
+    {
+      "description": "The primary metric must drop by at least the minimum step and no guard metric may rise beyond its tolerance.",
+      "key": "improves",
+      "label": "Score improves"
+    },
+    {
+      "description": "The full project builds on the pinned toolchain with no unfinished proofs.",
+      "key": "compiles",
+      "label": "Project compiles"
+    },
+    {
+      "description": "An independent checker with a second proof kernel confirms the original theorem statements are still proved from the standard axioms only.",
+      "key": "same_theorems",
+      "label": "Same theorems proved"
+    },
+    {
+      "description": "The verification ran on top of the latest main branch.",
+      "key": "fresh",
+      "label": "Verified on current main"
+    },
+    {
+      "description": "Approved by someone other than the author.",
+      "key": "review",
+      "label": "Independent review"
+    }
+  ],
+  "metrics": [
+    {
+      "description": "Source tokens after removing comments and whitespace. Reformatting cannot change it.",
+      "key": "tokens",
+      "label": "Tokens",
+      "unit": "tokens"
+    },
+    {
+      "description": "Lines that contain at least one token.",
+      "key": "loc",
+      "label": "Lines of code",
+      "unit": "lines"
+    },
+    {
+      "description": "Theorems, lemmas, definitions, structures, instances and similar.",
+      "key": "decls",
+      "label": "Declarations",
+      "unit": "decls"
+    },
+    {
+      "description": "Measured source files.",
+      "key": "files",
+      "label": "Files",
+      "unit": "files"
+    },
+    {
+      "description": "Size of the measured source files.",
+      "key": "bytes",
+      "label": "Bytes",
+      "unit": "bytes"
+    },
+    {
+      "description": "Wall-clock time of the verification build. Informational.",
+      "key": "build_seconds",
+      "label": "Build time",
+      "unit": "s"
+    }
+  ],
+  "settings": {
+    "Approvals for large changes": 2,
+    "Approvals required": 1,
+    "Idea claim length (hours)": 3,
+    "Large change threshold (files)": 20,
+    "Maximum line length": 100,
+    "Minimum improvement": 25,
+    "Primary metric": "tokens",
+    "Reviewer minimum account age (days)": 30
+  },
+  "theorems": [
+    "Solution.mainTheorem",
+    "Solution.mainTheoremApprox",
+    "Solution.separation",
+    "Solution.separationClosure",
+    "Solution.permanent_over_real"
+  ]
+}

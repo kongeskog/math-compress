@@ -1,0 +1,361 @@
+//! [`Forge`] backed by the `gh` command line tool, which is preinstalled and
+//! authenticated on GitHub-hosted runners.
+
+use anyhow::{bail, Context, Result};
+use chrono::{DateTime, Duration, Utc};
+use hc_core::gate::*;
+use hc_core::model::VerifyResult;
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
+use std::process::Command;
+
+pub struct GhForge {
+    pub repo: String,
+    pub branch: String,
+    pub workflow: String,
+    pub dry_run: bool,
+    labels: BTreeMap<u64, BTreeSet<String>>,
+    accounts: BTreeMap<String, DateTime<Utc>>,
+}
+
+fn s(v: &Value, key: &str) -> String {
+    v.get(key).and_then(Value::as_str).unwrap_or("").to_string()
+}
+
+fn time(v: &Value, key: &str) -> DateTime<Utc> {
+    v.get(key)
+        .and_then(Value::as_str)
+        .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| t.with_timezone(&Utc))
+        .unwrap_or_else(Utc::now)
+}
+
+impl GhForge {
+    pub fn new(repo: &str, branch: &str, workflow: &str, dry_run: bool) -> GhForge {
+        GhForge {
+            repo: repo.into(),
+            branch: branch.into(),
+            workflow: workflow.into(),
+            dry_run,
+            labels: BTreeMap::new(),
+            accounts: BTreeMap::new(),
+        }
+    }
+
+    fn gh(&self, args: &[&str]) -> Result<String> {
+        let out = Command::new("gh").args(args).output().context("running gh")?;
+        if !out.status.success() {
+            bail!("gh {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    fn get(&self, path: &str) -> Result<Value> {
+        let text = self.gh(&["api", &format!("repos/{}/{}", self.repo, path)])?;
+        Ok(serde_json::from_str(&text)?)
+    }
+
+    /// GET every page of a list endpoint.
+    fn list(&self, path: &str) -> Result<Vec<Value>> {
+        let text = self.gh(&["api", "--paginate", "--slurp", &format!("repos/{}/{}", self.repo, path)])?;
+        let pages: Vec<Value> = serde_json::from_str(&text)?;
+        Ok(pages
+            .into_iter()
+            .flat_map(|p| match p {
+                Value::Array(items) => items,
+                other => vec![other],
+            })
+            .collect())
+    }
+
+    /// A write call. Skipped (and logged) in dry-run mode.
+    fn write(&self, method: &str, path: &str, fields: &[(&str, &str)]) -> Result<Value> {
+        if self.dry_run {
+            eprintln!("dry-run: {method} {path} {fields:?}");
+            return Ok(Value::Null);
+        }
+        let url = format!("repos/{}/{}", self.repo, path);
+        let mut args = vec!["api".to_string(), "-X".into(), method.into(), url];
+        for (k, v) in fields {
+            args.push("-f".into());
+            args.push(format!("{k}={v}"));
+        }
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let text = self.gh(&refs)?;
+        Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
+    fn trusted_run(&self, run_id: u64) -> Result<Option<String>> {
+        let run = self.get(&format!("actions/runs/{run_id}"))?;
+        let event = s(&run, "event");
+        let same_repo = |k: &str| run.get(k).map(|r| s(r, "full_name")) == Some(self.repo.clone());
+        let ok = (event == "pull_request_target" || event == "workflow_dispatch")
+            && s(&run, "path").starts_with(&format!(".github/workflows/{}", self.workflow))
+            && s(&run, "head_branch") == self.branch
+            && same_repo("repository")
+            && same_repo("head_repository");
+        Ok(ok.then(|| s(&run, "html_url")))
+    }
+}
+
+impl Forge for GhForge {
+    fn main_head(&mut self) -> Result<String> {
+        Ok(s(&self.get(&format!("commits/{}", self.branch))?, "sha"))
+    }
+
+    fn open_prs(&mut self) -> Result<Vec<PullRequest>> {
+        let mut out = Vec::new();
+        for item in self.list("pulls?state=open&per_page=100")? {
+            let number = item["number"].as_u64().unwrap_or(0);
+            // The list endpoint omits `mergeable`; ask for each one.
+            let full = self.get(&format!("pulls/{number}")).unwrap_or(item);
+            let labels: Vec<String> = full["labels"]
+                .as_array()
+                .map(|a| a.iter().map(|l| s(l, "name")).collect())
+                .unwrap_or_default();
+            self.labels.insert(number, labels.iter().cloned().collect());
+            out.push(PullRequest {
+                number,
+                title: s(&full, "title"),
+                author: s(&full["user"], "login"),
+                body: s(&full, "body"),
+                head_sha: s(&full["head"], "sha"),
+                base_ref: s(&full["base"], "ref"),
+                created_at: time(&full, "created_at"),
+                url: s(&full, "html_url"),
+                draft: full["draft"].as_bool().unwrap_or(false),
+                mergeable: full["mergeable"].as_bool(),
+                labels,
+            });
+        }
+        Ok(out)
+    }
+
+    fn verify_result(&mut self, pr: u64, head_sha: &str) -> Result<Option<VerifyResult>> {
+        let name = format!("hillclimb-result-{pr}-{head_sha}");
+        let listing = self.get(&format!("actions/artifacts?name={name}&per_page=30"))?;
+        let mut artifacts: Vec<&Value> = listing["artifacts"]
+            .as_array()
+            .map(|a| a.iter().filter(|x| !x["expired"].as_bool().unwrap_or(false)).collect())
+            .unwrap_or_default();
+        artifacts.sort_by_key(|a| std::cmp::Reverse(s(a, "created_at")));
+        for a in artifacts {
+            let Some(run_id) = a["workflow_run"]["id"].as_u64() else { continue };
+            // Anyone can upload an artifact with this name from their own
+            // pull request workflow; only runs of the trusted workflow count.
+            let Some(run_url) = self.trusted_run(run_id)? else { continue };
+            let dir = std::env::temp_dir().join(format!("hc-artifact-{run_id}-{pr}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            self.gh(&[
+                "run", "download", &run_id.to_string(), "-R", &self.repo, "-n", &name, "-D",
+                &dir.to_string_lossy(),
+            ])?;
+            let text = std::fs::read_to_string(dir.join("result.json"))
+                .context("artifact has no result.json")?;
+            let mut result: VerifyResult = serde_json::from_str(&text)?;
+            if result.pr != pr || result.head_sha != head_sha {
+                continue;
+            }
+            result.run_url = Some(run_url);
+            return Ok(Some(result));
+        }
+        Ok(None)
+    }
+
+    fn active_verifies(&mut self) -> Result<BTreeSet<u64>> {
+        let mut out = BTreeSet::new();
+        for status in ["queued", "in_progress"] {
+            let runs = self.get(&format!(
+                "actions/workflows/{}/runs?status={status}&per_page=100",
+                self.workflow
+            ))?;
+            for run in runs["workflow_runs"].as_array().into_iter().flatten() {
+                if let Some(n) = pr_number(&s(run, "display_title")) {
+                    out.insert(n);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn dispatch_verify(&mut self, pr: u64) -> Result<()> {
+        if self.dry_run {
+            eprintln!("dry-run: dispatch verify for #{pr}");
+            return Ok(());
+        }
+        self.gh(&[
+            "workflow", "run", &self.workflow, "-R", &self.repo, "--ref", &self.branch, "-f",
+            &format!("pr={pr}"),
+        ])?;
+        Ok(())
+    }
+
+    fn reviews(&mut self, pr: u64) -> Result<Vec<ReviewInfo>> {
+        Ok(self
+            .list(&format!("pulls/{pr}/reviews?per_page=100"))?
+            .iter()
+            .map(|r| ReviewInfo {
+                user: s(&r["user"], "login"),
+                state: s(r, "state"),
+                commit_id: s(r, "commit_id"),
+                submitted_at: time(r, "submitted_at"),
+            })
+            .collect())
+    }
+
+    fn account_created(&mut self, login: &str) -> Result<DateTime<Utc>> {
+        if let Some(t) = self.accounts.get(login) {
+            return Ok(*t);
+        }
+        let text = self.gh(&["api", &format!("users/{login}")])?;
+        let v: Value = serde_json::from_str(&text)?;
+        // Unknown creation date counts as brand new.
+        let t = v["created_at"]
+            .as_str()
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.with_timezone(&Utc))
+            .unwrap_or_else(Utc::now);
+        self.accounts.insert(login.into(), t);
+        Ok(t)
+    }
+
+    fn set_status(&mut self, sha: &str, state: CommitState, description: &str) -> Result<()> {
+        let state = match state {
+            CommitState::Success => "success",
+            CommitState::Pending => "pending",
+            CommitState::Failure => "failure",
+        };
+        // A commit accepts a limited number of statuses; only post changes.
+        let current = self.get(&format!("commits/{sha}/status"))?;
+        let unchanged = current["statuses"].as_array().into_iter().flatten().any(|st| {
+            s(st, "context") == STATUS_CONTEXT && s(st, "state") == state && s(st, "description") == description
+        });
+        if !unchanged {
+            self.write(
+                "POST",
+                &format!("statuses/{sha}"),
+                &[("state", state), ("context", STATUS_CONTEXT), ("description", description)],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn upsert_comment(&mut self, pr: u64, body: &str) -> Result<()> {
+        let existing = self.list(&format!("issues/{pr}/comments?per_page=100"))?;
+        let mine = existing
+            .iter()
+            .find(|c| s(c, "body").starts_with(COMMENT_MARKER) && s(&c["user"], "type") == "Bot");
+        match mine {
+            Some(c) if s(c, "body").trim() == body.trim() => {}
+            Some(c) => {
+                let id = c["id"].as_u64().unwrap_or(0);
+                self.write("PATCH", &format!("issues/comments/{id}"), &[("body", body)])?;
+            }
+            None => {
+                self.write("POST", &format!("issues/{pr}/comments"), &[("body", body)])?;
+            }
+        }
+        Ok(())
+    }
+
+    fn set_label(&mut self, issue: u64, label: &str, present: bool) -> Result<()> {
+        let has = self.labels.get(&issue).is_some_and(|l| l.contains(label));
+        if has == present {
+            return Ok(());
+        }
+        let result = if present {
+            self.write("POST", &format!("issues/{issue}/labels"), &[("labels[]", label)])
+        } else {
+            self.write("DELETE", &format!("issues/{issue}/labels/{label}"), &[])
+        };
+        if let Err(e) = result {
+            eprintln!("label {label} on #{issue}: {e:#}");
+        }
+        let set = self.labels.entry(issue).or_default();
+        if present {
+            set.insert(label.into());
+        } else {
+            set.remove(label);
+        }
+        Ok(())
+    }
+
+    fn merge(&mut self, pr: &PullRequest, message: &str) -> Result<String> {
+        if self.dry_run {
+            eprintln!("dry-run: merge #{}", pr.number);
+            bail!("dry run");
+        }
+        let (title, body) = message.split_once("\n\n").unwrap_or((message, ""));
+        let v = self.write(
+            "PUT",
+            &format!("pulls/{}/merge", pr.number),
+            &[
+                ("merge_method", "squash"),
+                ("sha", &pr.head_sha),
+                ("commit_title", title),
+                ("commit_message", body),
+            ],
+        )?;
+        let sha = s(&v, "sha");
+        if sha.is_empty() {
+            bail!("merge of #{} returned no commit", pr.number);
+        }
+        Ok(sha)
+    }
+
+    fn idea_issues(&mut self) -> Result<Vec<IssueInfo>> {
+        Ok(self
+            .list("issues?labels=idea&state=all&per_page=100")?
+            .iter()
+            .filter(|i| i.get("pull_request").is_none())
+            .map(|i| IssueInfo {
+                number: i["number"].as_u64().unwrap_or(0),
+                title: s(i, "title"),
+                author: s(&i["user"], "login"),
+                open: s(i, "state") == "open",
+                created_at: time(i, "created_at"),
+                url: s(i, "html_url"),
+            })
+            .collect())
+    }
+
+    fn comments_since(&mut self, since: Option<DateTime<Utc>>) -> Result<Vec<CommentInfo>> {
+        let since = since.unwrap_or_else(|| Utc::now() - Duration::days(1));
+        let path = format!(
+            "issues/comments?since={}&sort=created&direction=asc&per_page=100",
+            since.format("%Y-%m-%dT%H:%M:%SZ")
+        );
+        Ok(self
+            .list(&path)?
+            .iter()
+            .filter(|c| s(&c["user"], "type") != "Bot")
+            .filter_map(|c| {
+                let issue = s(c, "issue_url").rsplit('/').next()?.parse().ok()?;
+                Some(CommentInfo {
+                    issue,
+                    user: s(&c["user"], "login"),
+                    body: s(c, "body"),
+                    created_at: time(c, "created_at"),
+                })
+            })
+            .collect())
+    }
+
+    fn assign(&mut self, issue: u64, login: &str, assigned: bool) -> Result<()> {
+        let method = if assigned { "POST" } else { "DELETE" };
+        self.write(method, &format!("issues/{issue}/assignees"), &[("assignees[]", login)])?;
+        Ok(())
+    }
+
+    fn comment(&mut self, issue: u64, body: &str) -> Result<()> {
+        self.write("POST", &format!("issues/{issue}/comments"), &[("body", body)])?;
+        Ok(())
+    }
+}
+
+/// The first `#<number>` in a run title such as `verify #12`.
+fn pr_number(text: &str) -> Option<u64> {
+    let at = text.find('#')?;
+    let digits: String = text[at + 1..].chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}

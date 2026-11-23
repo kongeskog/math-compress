@@ -1,0 +1,633 @@
+{
+  "project": {
+    "slug": "vp-vnp",
+    "title": "VP ≠ VNP",
+    "description": "A distributed effort to shorten the Lean 4 formalization of VP ≠ VNP, one machine-checked pull request at a time. Every merge still proves the same five theorems from the same three axioms.",
+    "repo": "kongeskog/formal-math",
+    "dir": "vp-vnp",
+    "upstream": "anthropics/formal-math",
+    "primary": "tokens",
+    "metrics": [
+      {
+        "key": "tokens",
+        "label": "Tokens",
+        "unit": "tokens",
+        "description": "Lean source tokens after stripping comments and whitespace. Lower is better."
+      },
+      {
+        "key": "loc",
+        "label": "Lines",
+        "unit": "lines",
+        "description": "Non-blank, non-comment lines of Lean."
+      },
+      {
+        "key": "decls",
+        "label": "Declarations",
+        "unit": "decls",
+        "description": "Theorems, lemmas, definitions, instances and structures."
+      },
+      {
+        "key": "files",
+        "label": "Files",
+        "unit": "files",
+        "description": "Lean source files counted."
+      },
+      {
+        "key": "bytes",
+        "label": "Bytes",
+        "unit": "bytes",
+        "description": "Size of the counted source on disk."
+      },
+      {
+        "key": "build_seconds",
+        "label": "Build time",
+        "unit": "seconds",
+        "description": "Wall-clock time of the full build in CI. Noisy; used as a loose guard."
+      }
+    ]
+  },
+  "updated_at": "2026-11-23T23:54:45.030Z",
+  "baseline": {
+    "sha": "765c37a769f54cf20bd0ed69a0f25873c7089dfe",
+    "at": "2026-11-18T23:54:45.030Z",
+    "metrics": {
+      "tokens": 928161,
+      "loc": 58797,
+      "decls": 4610,
+      "files": 321,
+      "bytes": 3421123,
+      "build_seconds": 1486
+    }
+  },
+  "current": {
+    "sha": "27647689a6408bb23a4788a164fdaff4f2bab74a",
+    "at": "2026-11-23T10:19:40.827Z",
+    "metrics": {
+      "tokens": 887820,
+      "loc": 55797,
+      "decls": 4492,
+      "files": 319,
+      "bytes": 3258462,
+      "build_seconds": 1359
+    }
+  },
+  "counts": {
+    "merged": 23,
+    "rejected": 37,
+    "open": 4,
+    "contributors": 10,
+    "ideas_open": 9
+  },
+  "leaderboard": [
+    {
+      "login": "mira-k",
+      "merged": 5,
+      "attempts": 9,
+      "saved": 10004
+    },
+    {
+      "login": "ana-rios",
+      "merged": 3,
+      "attempts": 5,
+      "saved": 9156
+    },
+    {
+      "login": "okabe-r",
+      "merged": 4,
+      "attempts": 7,
+      "saved": 8378
+    },
+    {
+      "login": "jdvries",
+      "merged": 3,
+      "attempts": 5,
+      "saved": 5995
+    },
+    {
+      "login": "lean-otter",
+      "merged": 4,
+      "attempts": 9,
+      "saved": 2928
+    },
+    {
+      "login": "qfwd",
+      "merged": 2,
+      "attempts": 6,
+      "saved": 2432
+    },
+    {
+      "login": "tobiasz",
+      "merged": 1,
+      "attempts": 5,
+      "saved": 1330
+    },
+    {
+      "login": "hszabo",
+      "merged": 1,
+      "attempts": 3,
+      "saved": 118
+    },
+    {
+      "login": "nyx-0",
+      "merged": 0,
+      "attempts": 9,
+      "saved": 0
+    },
+    {
+      "login": "pnkfelix2",
+      "merged": 0,
+      "attempts": 6,
+      "saved": 0
+    }
+  ],
+  "ideas": [
+    {
+      "number": 100,
+      "title": "Delete declarations unreachable from Solution.lean",
+      "status": "done",
+      "author": "tobiasz",
+      "claimed_by": "mira-k",
+      "lease_expires": null,
+      "pr": 13,
+      "result_delta": -1290,
+      "created_at": "2026-11-21T07:24:10.752Z",
+      "url": "https://github.com/kongeskog/formal-math/issues/100"
+    },
+    {
+      "number": 101,
+      "title": "Replace blanket `import Mathlib` with narrow imports where it shortens `open` lines",
+      "status": "done",
+      "author": "mira-k",
+      "claimed_by": "jdvries",
+      "lease_expires": null,
+      "pr": 54,
+      "result_delta": -964,
+      "created_at": "2026-11-21T17:38:00.442Z",
+      "url": "https://github.com/kongeskog/formal-math/issues/101"
+    },
+    {
+      "number": 102,
+      "title": "Unify the three copies of Computes behind one definition",
+      "status": "claimed",
+      "author": "pnkfelix2",
+      "claimed_by": "mira-k",
+      "lease_expires": "2026-11-24T01:29:45.030Z",
+      "pr": 61,
+      "result_delta": null,
+      "created_at": "2026-11-19T23:30:35.798Z",
+      "url": "https://github.com/kongeskog/formal-math/issues/102"
+    },
+    {
+      "number": 103,
+      "title": "Remove the toNc / ofNc bridge by proving directly against Statement",
+      "status": "claimed",
+      "author": "pnkfelix2",
+      "claimed_by": "okabe-r",
+      "lease_expires": "2026-11-24T00:16:45.030Z",
+      "pr": null,
+      "result_delta": null,
+      "created_at": "2026-11-20T14:59:09.385Z",
+      "url": "https://github.com/kongeskog/formal-math/issues/103"
+    },
+    {
+      "number": 104,
+      "title": "Paper/Tree.lean: generalize the subtree bound lemmas",
+      "status": "closed",
+      "author": "ana-rios",
+      "claimed_by": null,
+      "lease_expires": null,
+      "pr": null,
+      "result_delta": null,
+      "created_at": "2026-11-19T17:44:38.996Z",
+      "url": "https://github.com/kongeskog/formal-math/issues/104"
+    },
+    {
+      "number": 105,
+      "title": "Nc/Tow: Load0 and Load2 share most of their case analysis",
+      "status": "open",
+      "author": "hszabo",
+      "claimed_by": null,
+      "lease_expires": null,
+      "pr": null,
+      "result_delta": null,
+      "created_at": "2026-11-21T08:01:49.585Z",
+      "url": "https://github.com/kongeskog/formal-math/issues/105"
+    },
+    {
+      "number": 106,
+      "title": "Use `gcongr` for the monotonicity blocks in Paper/Rate.lean",
+      "status": "open",
+      "author": "qfwd",
+      "claimed_by": null,
+      "lease_expires": null,
+      "pr": null,
+      "result_delta": null,
+      "created_at": "2026-11-20T18:52:56.606Z",
+      "url": "https://github.com/kongeskog/formal-math/issues/106"
+    },
+    {
+      "number": 107,
+      "title": "NS1/Lists.lean duplicates List lemmas already in Mathlib",
+      "status": "open",
+      "author": "jdvries",
+      "claimed_by": null,
+      "lease_expires": null,
+      "pr": null,
+      "result_delta": null,
+      "created_at": "2026-11-19T15:16:22.840Z",
+      "url": "https://github.com/kongeskog/formal-math/issues/107"
+    },
+    {
+      "number": 108,
+      "title": "Collapse the 16 maxHeartbeats proofs into smaller lemmas",
+      "status": "open",
+      "author": "qfwd",
+      "claimed_by": null,
+      "lease_expires": null,
+      "pr": null,
+      "result_delta": null,
+      "created_at": "2026-11-22T02:33:08.585Z",
+      "url": "https://github.com/kongeskog/formal-math/issues/108"
+    },
+    {
+      "number": 109,
+      "title": "Paper/Groups.lean: replace explicit coset arithmetic with `group`",
+      "status": "open",
+      "author": "tobiasz",
+      "claimed_by": null,
+      "lease_expires": null,
+      "pr": null,
+      "result_delta": null,
+      "created_at": "2026-11-20T04:27:55.402Z",
+      "url": "https://github.com/kongeskog/formal-math/issues/109"
+    },
+    {
+      "number": 110,
+      "title": "Shorten Paper/Fan.lean with a single strong induction",
+      "status": "open",
+      "author": "pnkfelix2",
+      "claimed_by": null,
+      "lease_expires": null,
+      "pr": null,
+      "result_delta": null,
+      "created_at": "2026-11-19T09:11:56.430Z",
+      "url": "https://github.com/kongeskog/formal-math/issues/110"
+    },
+    {
+      "number": 111,
+      "title": "Turn repeated `have` chains in Nc/G/Move.lean into one `calc`",
+      "status": "open",
+      "author": "qfwd",
+      "claimed_by": null,
+      "lease_expires": null,
+      "pr": null,
+      "result_delta": null,
+      "created_at": "2026-11-21T17:37:11.590Z",
+      "url": "https://github.com/kongeskog/formal-math/issues/111"
+    },
+    {
+      "number": 112,
+      "title": "Paper/Identity.lean: the `entries` macro can be a simp set",
+      "status": "open",
+      "author": "jdvries",
+      "claimed_by": null,
+      "lease_expires": null,
+      "pr": null,
+      "result_delta": null,
+      "created_at": "2026-11-21T14:21:03.812Z",
+      "url": "https://github.com/kongeskog/formal-math/issues/112"
+    },
+    {
+      "number": 113,
+      "title": "Nc/Grp: GroupProg and GrpTime prove the same bound twice",
+      "status": "open",
+      "author": "qfwd",
+      "claimed_by": null,
+      "lease_expires": null,
+      "pr": null,
+      "result_delta": null,
+      "created_at": "2026-11-19T14:51:22.718Z",
+      "url": "https://github.com/kongeskog/formal-math/issues/113"
+    }
+  ],
+  "open": [
+    {
+      "pr": 61,
+      "title": "Use Mathlib lemma instead of local copy in Nc/Dl/SizeDeal.lean",
+      "author": "mira-k",
+      "head_sha": "b1a3996cc8e98075c8dc59ee4980a0f42f501776",
+      "base_sha": "27647689a6408bb23a4788a164fdaff4f2bab74a",
+      "status": "awaiting_review",
+      "created_at": "2026-11-23T22:10:45.030Z",
+      "decided_at": null,
+      "metrics": {
+        "tokens": 887078,
+        "loc": 55744,
+        "decls": 4492,
+        "files": 319,
+        "bytes": 3255494,
+        "build_seconds": null
+      },
+      "base_metrics": {
+        "tokens": 887820,
+        "loc": 55797,
+        "decls": 4492,
+        "files": 319,
+        "bytes": 3258462,
+        "build_seconds": 1359
+      },
+      "delta": -742,
+      "gates": [
+        {
+          "key": "frozen",
+          "label": "Frozen files unchanged",
+          "status": "pass"
+        },
+        {
+          "key": "scope",
+          "label": "Changes stay inside the project",
+          "status": "pass"
+        },
+        {
+          "key": "deny",
+          "label": "No banned constructs",
+          "status": "pass"
+        },
+        {
+          "key": "build",
+          "label": "Compiles without sorry",
+          "status": "pass"
+        },
+        {
+          "key": "comparator",
+          "label": "Same theorems, same axioms",
+          "status": "pass"
+        },
+        {
+          "key": "improves",
+          "label": "Score improves, guards hold",
+          "status": "pass"
+        },
+        {
+          "key": "fresh",
+          "label": "Verified on current main",
+          "status": "pass"
+        },
+        {
+          "key": "review",
+          "label": "Independent review",
+          "status": "pending"
+        }
+      ],
+      "idea": 102,
+      "url": "https://github.com/kongeskog/formal-math/pull/61",
+      "run_url": "https://github.com/kongeskog/formal-math/actions/runs/9008357",
+      "merge_sha": null,
+      "reason": null
+    },
+    {
+      "pr": 62,
+      "title": "Merge duplicate helper lemmas in Nc/Grp/GroupProg.lean",
+      "author": "qfwd",
+      "head_sha": "ccd42db4587941c5041f110ce4f04b369f9a0ff1",
+      "base_sha": "27647689a6408bb23a4788a164fdaff4f2bab74a",
+      "status": "verifying",
+      "created_at": "2026-11-23T22:36:45.030Z",
+      "decided_at": null,
+      "metrics": {
+        "tokens": 887502,
+        "loc": 55774,
+        "decls": 4492,
+        "files": 319,
+        "bytes": 3257190,
+        "build_seconds": null
+      },
+      "base_metrics": {
+        "tokens": 887820,
+        "loc": 55797,
+        "decls": 4492,
+        "files": 319,
+        "bytes": 3258462,
+        "build_seconds": 1359
+      },
+      "delta": -318,
+      "gates": [
+        {
+          "key": "frozen",
+          "label": "Frozen files unchanged",
+          "status": "pass"
+        },
+        {
+          "key": "scope",
+          "label": "Changes stay inside the project",
+          "status": "pass"
+        },
+        {
+          "key": "deny",
+          "label": "No banned constructs",
+          "status": "pass"
+        },
+        {
+          "key": "build",
+          "label": "Compiles without sorry",
+          "status": "pending"
+        },
+        {
+          "key": "comparator",
+          "label": "Same theorems, same axioms",
+          "status": "pending"
+        },
+        {
+          "key": "improves",
+          "label": "Score improves, guards hold",
+          "status": "pending"
+        },
+        {
+          "key": "fresh",
+          "label": "Verified on current main",
+          "status": "pending"
+        },
+        {
+          "key": "review",
+          "label": "Independent review",
+          "status": "pending"
+        }
+      ],
+      "idea": null,
+      "url": "https://github.com/kongeskog/formal-math/pull/62",
+      "run_url": "https://github.com/kongeskog/formal-math/actions/runs/9008494",
+      "merge_sha": null,
+      "reason": null
+    },
+    {
+      "pr": 63,
+      "title": "Merge duplicate helper lemmas in Paper/Flat.lean",
+      "author": "hszabo",
+      "head_sha": "a3e18b184ef5bc54c5e49c5e218523e6eb5a58ec",
+      "base_sha": "27647689a6408bb23a4788a164fdaff4f2bab74a",
+      "status": "stale",
+      "created_at": "2026-11-23T23:02:45.030Z",
+      "decided_at": null,
+      "metrics": {
+        "tokens": 886530,
+        "loc": 55705,
+        "decls": 4492,
+        "files": 319,
+        "bytes": 3253302,
+        "build_seconds": null
+      },
+      "base_metrics": {
+        "tokens": 887820,
+        "loc": 55797,
+        "decls": 4492,
+        "files": 319,
+        "bytes": 3258462,
+        "build_seconds": 1359
+      },
+      "delta": -1290,
+      "gates": [
+        {
+          "key": "frozen",
+          "label": "Frozen files unchanged",
+          "status": "pass"
+        },
+        {
+          "key": "scope",
+          "label": "Changes stay inside the project",
+          "status": "pass"
+        },
+        {
+          "key": "deny",
+          "label": "No banned constructs",
+          "status": "pass"
+        },
+        {
+          "key": "build",
+          "label": "Compiles without sorry",
+          "status": "pass"
+        },
+        {
+          "key": "comparator",
+          "label": "Same theorems, same axioms",
+          "status": "pass"
+        },
+        {
+          "key": "improves",
+          "label": "Score improves, guards hold",
+          "status": "pass"
+        },
+        {
+          "key": "fresh",
+          "label": "Verified on current main",
+          "status": "pending"
+        },
+        {
+          "key": "review",
+          "label": "Independent review",
+          "status": "pending"
+        }
+      ],
+      "idea": null,
+      "url": "https://github.com/kongeskog/formal-math/pull/63",
+      "run_url": "https://github.com/kongeskog/formal-math/actions/runs/9008631",
+      "merge_sha": null,
+      "reason": "Main moved; branch updated and verification re-running"
+    },
+    {
+      "pr": 64,
+      "title": "Use Mathlib lemma instead of local copy in NS1/Lists.lean",
+      "author": "nyx-0",
+      "head_sha": "74f52037053888a745cc69621e0a4b1d3e44d930",
+      "base_sha": "27647689a6408bb23a4788a164fdaff4f2bab74a",
+      "status": "verifying",
+      "created_at": "2026-11-23T23:28:45.030Z",
+      "decided_at": null,
+      "metrics": null,
+      "base_metrics": null,
+      "delta": null,
+      "gates": [],
+      "idea": null,
+      "url": "https://github.com/kongeskog/formal-math/pull/64",
+      "run_url": "https://github.com/kongeskog/formal-math/actions/runs/9008768",
+      "merge_sha": null,
+      "reason": null
+    }
+  ],
+  "top_files": [
+    {
+      "path": "Paper/Tree.lean",
+      "tokens": 21480,
+      "loc": 1652
+    },
+    {
+      "path": "Paper/Groups.lean",
+      "tokens": 15102,
+      "loc": 1162
+    },
+    {
+      "path": "Paper/Fan.lean",
+      "tokens": 13377,
+      "loc": 1029
+    },
+    {
+      "path": "Paper/Alternative.lean",
+      "tokens": 12240,
+      "loc": 942
+    },
+    {
+      "path": "Paper/Pieces.lean",
+      "tokens": 11896,
+      "loc": 915
+    },
+    {
+      "path": "Nc/Dl/SizeDeal.lean",
+      "tokens": 10411,
+      "loc": 801
+    },
+    {
+      "path": "Paper/Identity.lean",
+      "tokens": 9987,
+      "loc": 768
+    },
+    {
+      "path": "Paper/Flat.lean",
+      "tokens": 8530,
+      "loc": 656
+    },
+    {
+      "path": "Paper/Gauges.lean",
+      "tokens": 8122,
+      "loc": 625
+    },
+    {
+      "path": "NS1/Lists.lean",
+      "tokens": 7719,
+      "loc": 594
+    },
+    {
+      "path": "Nc/G/PlayThm.lean",
+      "tokens": 7410,
+      "loc": 570
+    },
+    {
+      "path": "Nc/Tow/Load0.lean",
+      "tokens": 7003,
+      "loc": 539
+    },
+    {
+      "path": "NS1/Comp.lean",
+      "tokens": 6950,
+      "loc": 535
+    },
+    {
+      "path": "Nc/Hc/Segments.lean",
+      "tokens": 6611,
+      "loc": 509
+    },
+    {
+      "path": "Nc/Grp/GroupProg.lean",
+      "tokens": 6204,
+      "loc": 477
+    }
+  ]
+}

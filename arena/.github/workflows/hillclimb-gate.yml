@@ -1,0 +1,24 @@
+name: hillclimb-gate
+
+on:
+  workflow_run:
+    workflows: [hillclimb-verify]
+    types: [completed]
+  issues:
+    types: [opened, labeled, closed, reopened]
+  issue_comment:
+    types: [created]
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  statuses: write
+  actions: write
+
+jobs:
+  gate:
+    uses: kongeskog/math-compress/.github/workflows/gatekeeper.yml@main

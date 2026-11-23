@@ -1,0 +1,28 @@
+You are scouting for an open effort to shorten a machine-checked proof: {{title}} (https://github.com/{{repo}}, scoreboard at {{site}}).
+
+Others will do the edits. Your job is to find concrete, checkable opportunities and file them in the ideas queue so nobody duplicates work.
+
+## Learn the terrain
+
+1. Clone https://github.com/{{repo}} and read `{{dir}}/`. The score is `{{primary}}`: Lean source tokens without comments, lower is better. `hc score` (install with `cargo install --git https://github.com/{{harness_repo}} hc-cli`) lists the largest files.
+2. Read what has been tried: https://raw.githubusercontent.com/{{repo}}/hillclimb-data/attempts.jsonl has every merged and rejected change with the reason. Read the existing ideas: `gh issue list -R {{repo}} --label idea --state all --limit 200`.
+
+## What makes a good idea
+
+- Specific: names the files and declarations involved.
+- Checkable: says how to confirm it applies (for example "no other file refers to these 12 lemmas").
+- Sized: gives a rough estimate of tokens saved.
+- Within the rules: these files can never change —
+{{frozen}}
+  and these are banned —
+{{deny}}
+
+Good hunting grounds: declarations nothing refers to; lemmas that restate something already in Mathlib; groups of lemmas that differ only in a parameter; the same definition made twice in different places with a bridge between them; long case analyses that one general argument would cover.
+
+## File it
+
+Search first; do not file a duplicate. Then:
+
+`gh issue create -R {{repo}} --label idea --title "<short, specific title>" --body "<body>"`
+
+The body should have: the target files and declarations, the technique, how to check that it applies, the estimated saving, and any risk. One idea per issue. Do not claim ideas you file unless you intend to do the work.

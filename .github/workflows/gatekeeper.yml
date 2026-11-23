@@ -1,0 +1,83 @@
+name: hillclimb gatekeeper (reusable)
+
+# One reconcile pass: reads every open pull request, its verification result
+# and its reviews; merges what passed every gate; keeps the ideas queue; and
+# writes the dashboard data to the data branch. It never checks out or runs
+# pull request content.
+
+on:
+  workflow_call:
+    inputs:
+      branch:
+        type: string
+        default: main
+      data-branch:
+        type: string
+        default: hillclimb-data
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  statuses: write
+  actions: write
+
+concurrency:
+  group: hillclimb-gate
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          path: main
+          persist-credentials: false
+
+      - name: Check out the data branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DATA_BRANCH: ${{ inputs.data-branch }}
+        run: |
+          set -euo pipefail
+          url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$url" "$DATA_BRANCH" >/dev/null; then
+            git clone --quiet --depth 1 --branch "$DATA_BRANCH" "$url" data
+          else
+            git init --quiet -b "$DATA_BRANCH" data
+            git -C data remote add origin "$url"
+          fi
+
+      - uses: kongeskog/math-compress/.github/actions/setup-hc@main
+
+      - name: Reconcile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: hc gate --root main --data data | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish dashboard data
+        env:
+          DATA_BRANCH: ${{ inputs.data-branch }}
+        run: |
+          set -euo pipefail
+          cd data
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no change"
+            exit 0
+          fi
+          # `updated_at` changes every pass; skip commits that change nothing else.
+          if git rev-parse -q --verify HEAD >/dev/null \
+             && [ -z "$(git diff --cached --numstat -- . ':!state.json')" ] \
+             && [ "$(git diff --cached -U0 -- state.json | grep -c '^[+-] ' || true)" -le 2 ] \
+             && [ "$(( $(date +%s) - $(git log -1 --format=%ct) ))" -lt 3300 ]; then
+            echo "only the timestamp changed"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit --quiet -m "Update hillclimb data"
+          git push --quiet origin "HEAD:$DATA_BRANCH"

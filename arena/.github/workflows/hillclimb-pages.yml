@@ -1,0 +1,16 @@
+name: hillclimb-pages
+
+on:
+  push:
+    branches: [main]
+    paths: [hillclimb.toml, .github/workflows/hillclimb-pages.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  pages:
+    uses: kongeskog/math-compress/.github/workflows/pages.yml@main

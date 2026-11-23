@@ -1,0 +1,71 @@
+name: hillclimb pages (reusable)
+
+# Builds the dashboard from this repository and deploys it to the arena's
+# GitHub Pages together with the arena's prompts, rules and config.
+
+on:
+  workflow_call:
+    inputs:
+      branch:
+        type: string
+        default: main
+      harness-ref:
+        type: string
+        default: main
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: hillclimb-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Check out the arena
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          path: arena
+          persist-credentials: false
+      - name: Check out the harness
+        uses: actions/checkout@v4
+        with:
+          repository: kongeskog/math-compress
+          ref: ${{ inputs.harness-ref }}
+          path: harness
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: harness/web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: harness/web/pnpm-lock.yaml
+      - name: Build the dashboard
+        working-directory: harness/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          rm -rf dist/demo
+      - uses: kongeskog/math-compress/.github/actions/setup-hc@main
+      - id: pages
+        uses: actions/configure-pages@v5
+      - name: Add the project's prompts, rules and config
+        env:
+          SITE: ${{ steps.pages.outputs.base_url }}
+        run: hc render --root arena --out harness/web/dist --site "$SITE/"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: harness/web/dist
+      - id: deploy
+        uses: actions/deploy-pages@v4

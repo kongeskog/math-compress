@@ -1,0 +1,298 @@
+name: hillclimb verify (reusable)
+
+# Verifies one pull request of a hillclimb arena.
+#
+# Trust model. The calling workflow runs on `pull_request_target`, so this
+# definition and every script it uses come from the arena's main branch and
+# from this repository, never from the pull request. Pull request content is
+# handled in two ways only:
+#   * as data, read by `hc eval` (static job);
+#   * as code, compiled inside a container that has no network and can write
+#     nowhere but the project checkout (build job). The toolchain, the checker
+#     and its tools live outside that container.
+# No job that touches pull request content has a write token or a secret.
+#
+# With `pr: 0` the workflow builds main itself and saves the build cache that
+# pull request runs restore.
+
+on:
+  workflow_call:
+    inputs:
+      pr:
+        description: Pull request number, or 0 to build main and refresh the cache
+        type: number
+        required: true
+      dir:
+        description: Project directory inside the arena repository
+        type: string
+        required: true
+      branch:
+        type: string
+        default: main
+      runner:
+        type: string
+        default: ubuntu-latest
+      build-image:
+        description: Container image the untrusted build runs in (needs git and glibc)
+        type: string
+        default: buildpack-deps:noble-scm
+      timeout-minutes:
+        type: number
+        default: 240
+
+permissions:
+  contents: read
+
+env:
+  ELAN_VERSION: v4.2.3
+  ELAN_SHA256: df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2
+
+jobs:
+  static:
+    name: static gates
+    if: inputs.pr != 0
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      ok: ${{ steps.eval.outputs.ok }}
+      head_sha: ${{ steps.merge.outputs.head_sha }}
+      base_sha: ${{ steps.merge.outputs.base_sha }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          path: base
+          persist-credentials: false
+
+      - name: Merge the pull request onto main (as data)
+        id: merge
+        env:
+          PR: ${{ inputs.pr }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          base_sha="$(git -C base rev-parse HEAD)"
+          git -C base fetch --quiet --no-tags "$REPO_URL" "pull/$PR/head"
+          head_sha="$(git -C base rev-parse FETCH_HEAD)"
+          git -C base worktree add --quiet --detach ../head "$base_sha"
+          conflict=false
+          git -C head -c user.name=hillclimb -c user.email=hillclimb@users.noreply.github.com \
+            -c core.hooksPath=/dev/null merge --quiet --no-ff --no-edit "$head_sha" || conflict=true
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "conflict=$conflict" >> "$GITHUB_OUTPUT"
+
+      - uses: kongeskog/math-compress/.github/actions/setup-hc@main
+
+      - name: Evaluate static gates
+        id: eval
+        env:
+          PR: ${{ inputs.pr }}
+          HEAD_SHA: ${{ steps.merge.outputs.head_sha }}
+          BASE_SHA: ${{ steps.merge.outputs.base_sha }}
+          CONFLICT: ${{ steps.merge.outputs.conflict }}
+        run: |
+          set -euo pipefail
+          if [ "$CONFLICT" = true ]; then
+            echo "::error::The pull request conflicts with main."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          hc eval --head head --base base --pr "$PR" --head-sha "$HEAD_SHA" --base-sha "$BASE_SHA" \
+            --out static.json | tee -a "$GITHUB_STEP_SUMMARY"
+          if jq -e '[.gates[] | select(.status != "pass")] | length == 0' static.json >/dev/null; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: steps.merge.outputs.conflict != 'true'
+        with:
+          name: hillclimb-static
+          path: static.json
+          retention-days: 7
+
+  build:
+    name: build and check proofs
+    needs: static
+    if: always() && (inputs.pr == 0 || needs.static.outputs.ok == 'true')
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      compiles: ${{ steps.build.outputs.compiles }}
+      same_theorems: ${{ steps.comparator.outputs.result }}
+      seconds: ${{ steps.build.outputs.seconds }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.pr == 0 && inputs.branch || needs.static.outputs.base_sha }}
+          path: work
+          persist-credentials: false
+
+      - name: Merge the pull request onto main
+        if: inputs.pr != 0
+        env:
+          HEAD_SHA: ${{ needs.static.outputs.head_sha }}
+          PR: ${{ inputs.pr }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git -C work fetch --quiet --no-tags "$REPO_URL" "pull/$PR/head"
+          # Build exactly the commit the static gates saw, even if the branch moved since.
+          git -C work -c user.name=hillclimb -c user.email=hillclimb@users.noreply.github.com \
+            -c core.hooksPath=/dev/null merge --quiet --no-ff --no-edit "$HEAD_SHA"
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Install elan and the pinned toolchain
+        working-directory: work/${{ inputs.dir }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --proto '=https' --tlsv1.2 --output "$RUNNER_TEMP/elan.tar.gz" \
+            "https://github.com/leanprover/elan/releases/download/${ELAN_VERSION}/elan-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${ELAN_SHA256}  $RUNNER_TEMP/elan.tar.gz" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/elan"
+          tar -xzf "$RUNNER_TEMP/elan.tar.gz" -C "$RUNNER_TEMP/elan"
+          "$RUNNER_TEMP/elan/elan-init" -y --no-modify-path --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.elan/bin:$PATH"
+          lean --version
+
+      # The lakefile, manifest and toolchain are frozen, so fetching the
+      # dependency cache runs only pinned, trusted code.
+      - name: Fetch the dependency cache
+        working-directory: work/${{ inputs.dir }}
+        run: |
+          if grep -q '"name": *"mathlib"' lake-manifest.json 2>/dev/null; then
+            lake exe cache get
+          fi
+
+      # Restored from builds of main only; pull request builds never save.
+      - name: Restore main's build
+        if: inputs.pr != 0
+        uses: actions/cache/restore@v4
+        with:
+          path: work/${{ inputs.dir }}/.lake/build
+          key: hillclimb-build-${{ inputs.dir }}-${{ needs.static.outputs.base_sha }}
+          restore-keys: |
+            hillclimb-build-${{ inputs.dir }}-
+
+      - name: Build in a container without network
+        id: build
+        working-directory: work/${{ inputs.dir }}
+        env:
+          IMAGE: ${{ inputs.build-image }}
+        run: |
+          set -uo pipefail
+          prefix="$(lean --print-prefix)"
+          docker pull --quiet "$IMAGE"
+          start=$(date +%s)
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            --cap-drop ALL --security-opt no-new-privileges \
+            -e HOME=/tmp -e PATH="$prefix/bin:/usr/local/bin:/usr/bin:/bin" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
+            -v "$prefix:$prefix:ro" \
+            -v "$GITHUB_WORKSPACE/work:$GITHUB_WORKSPACE/work" \
+            -w "$PWD" "$IMAGE" lake build 2>&1 | tee "$RUNNER_TEMP/lake-build.log"
+          status=${PIPESTATUS[0]}
+          echo "seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+          compiles=pass
+          if [ "$status" -ne 0 ]; then
+            echo "::error::lake build failed"
+            compiles=fail
+          elif grep -F "declaration uses 'sorry'" "$RUNNER_TEMP/lake-build.log" \
+               | grep -v -E '(^|[ /])Challenge(/[^ :]*)?\.lean:'; then
+            echo "::error::sorry outside the challenge files"
+            compiles=fail
+          fi
+          echo "compiles=$compiles" >> "$GITHUB_OUTPUT"
+
+      - name: Cache checker tools
+        if: steps.build.outputs.compiles == 'pass'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/lean-ci-tools
+          key: hillclimb-tools-${{ hashFiles(format('work/{0}/lean-toolchain', inputs.dir), 'work/.github/scripts/comparator-check.sh') }}
+
+      # Runs on the host, with tools the container could not reach. The checker
+      # rebuilds and exports the solution inside its own sandbox and replays
+      # every proof in two independent kernels.
+      - name: Check that the same theorems are proved
+        id: comparator
+        if: steps.build.outputs.compiles == 'pass'
+        working-directory: work/${{ inputs.dir }}
+        env:
+          LOG_DIR: ${{ runner.temp }}/comparator-logs
+        run: |
+          if bash ../.github/scripts/comparator-check.sh; then
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save main's build
+        if: inputs.pr == 0 && steps.build.outputs.compiles == 'pass' && steps.comparator.outputs.result == 'pass'
+        uses: actions/cache/save@v4
+        with:
+          path: work/${{ inputs.dir }}/.lake/build
+          key: hillclimb-build-${{ inputs.dir }}-${{ github.sha }}-${{ github.run_id }}
+
+      - name: Fail if main itself does not verify
+        if: inputs.pr == 0 && (steps.build.outputs.compiles != 'pass' || steps.comparator.outputs.result != 'pass')
+        run: exit 1
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hillclimb-logs
+          path: |
+            ${{ runner.temp }}/lake-build.log
+            ${{ runner.temp }}/comparator-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  result:
+    name: publish result
+    needs: [static, build]
+    if: always() && inputs.pr != 0 && needs.static.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        id: dl
+        continue-on-error: true
+        with:
+          name: hillclimb-static
+      - uses: kongeskog/math-compress/.github/actions/setup-hc@main
+        if: steps.dl.outcome == 'success'
+      - name: Combine static and build outcomes
+        if: steps.dl.outcome == 'success'
+        env:
+          COMPILES: ${{ needs.build.outputs.compiles }}
+          SAME: ${{ needs.build.outputs.same_theorems }}
+          SECONDS_TAKEN: ${{ needs.build.outputs.seconds }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: |
+          set -euo pipefail
+          compiles="${COMPILES:-skip}"
+          same="${SAME:-skip}"
+          # A build job that died (timeout, crash) counts as a failed build.
+          if [ "$BUILD_RESULT" = failure ] || [ "$BUILD_RESULT" = cancelled ]; then
+            [ "$compiles" = pass ] || compiles=fail
+          fi
+          args=(--static static.json --compiles "$compiles" --same-theorems "$same" --out result.json)
+          [ -z "${SECONDS_TAKEN:-}" ] || args+=(--build-seconds "$SECONDS_TAKEN")
+          hc finalize "${args[@]}"
+          jq -r '.gates[] | "\(.status)\t\(.label)\t\(.detail // "")"' result.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: steps.dl.outcome == 'success'
+        with:
+          name: hillclimb-result-${{ inputs.pr }}-${{ needs.static.outputs.head_sha }}
+          path: result.json
+          retention-days: 90

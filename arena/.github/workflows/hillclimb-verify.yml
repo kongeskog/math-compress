@@ -1,0 +1,29 @@
+name: hillclimb-verify
+run-name: "verify #${{ github.event.pull_request.number || inputs.pr }}"
+
+# Runs from main for every pull request. Do not change the trigger to
+# `pull_request`: the definition must never come from the pull request.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number (0 builds main and refreshes the build cache)
+        required: true
+        type: number
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hillclimb-verify-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    uses: kongeskog/math-compress/.github/workflows/verify.yml@main
+    with:
+      pr: ${{ fromJSON(format('{0}', github.event.pull_request.number || inputs.pr)) }}
+      dir: vp-vnp
