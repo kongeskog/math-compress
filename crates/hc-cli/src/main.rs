@@ -55,8 +55,9 @@ enum Cmd {
         /// A checkout of the base. If omitted, `--base-ref` is exported from git.
         #[arg(long)]
         base: Option<PathBuf>,
-        #[arg(long, default_value = "origin/main")]
-        base_ref: String,
+        /// Defaults to `upstream/main` when that remote exists (a fork's clone), else `origin/main`.
+        #[arg(long)]
+        base_ref: Option<String>,
         #[arg(long, default_value_t = 0)]
         pr: u64,
         #[arg(long, default_value = "")]
@@ -139,7 +140,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Eval { head, base, base_ref, pr, head_sha, base_sha, author, author_open_prs, out } => {
-            eval_cmd(&head, base, &base_ref, pr, head_sha, base_sha, &author, author_open_prs, out)
+            eval_cmd(&head, base, base_ref, pr, head_sha, base_sha, &author, author_open_prs, out)
         }
         Cmd::Finalize { static_result, compiles, same_theorems, build_seconds, out } => {
             finalize(&static_result, compiles, same_theorems, build_seconds, &out)
@@ -201,7 +202,7 @@ fn export_ref(repo: &Path, reference: &str) -> Result<PathBuf> {
 fn eval_cmd(
     head: &Path,
     base: Option<PathBuf>,
-    base_ref: &str,
+    base_ref: Option<String>,
     pr: u64,
     head_sha: String,
     base_sha: String,
@@ -211,7 +212,19 @@ fn eval_cmd(
 ) -> Result<()> {
     let (base_dir, temp) = match base {
         Some(b) => (b, false),
-        None => (export_ref(head, base_ref)?, true),
+        None => {
+            let reference = base_ref.unwrap_or_else(|| {
+                let has_upstream = Command::new("git")
+                    .arg("-C")
+                    .arg(head)
+                    .args(["rev-parse", "--verify", "--quiet", "upstream/main"])
+                    .output()
+                    .is_ok_and(|o| o.status.success());
+                if has_upstream { "upstream/main".into() } else { "origin/main".into() }
+            });
+            println!("Comparing with {reference}\n");
+            (export_ref(head, &reference)?, true)
+        }
     };
     // The configuration always comes from the base: a change cannot relax its own rules.
     let cfg = Config::load(&base_dir.join("hillclimb.toml"))?;
