@@ -444,6 +444,16 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                     main_tree = self.forge.main_tree()?;
                     out.current = Some(Point { sha: merge_sha.clone(), at: self.now, metrics: result.metrics });
                     out.log.push(format!("#{}: merged ({delta})", pr.number));
+                    if let Some(idea) = attempt.idea {
+                        // An idea can take several changes, so it is not closed here.
+                        let _ = self.forge.comment(
+                            idea,
+                            &format!(
+                                "#{} merged for this idea ({delta} {}). If nothing is left to do here, an ideator or leader closes the issue; otherwise it stays open for the rest.",
+                                pr.number, self.cfg.score.primary
+                            ),
+                        );
+                    }
                     out.decided.push(attempt);
                     // What landed must be exactly what was verified.
                     if result.merged_tree.as_ref().is_some_and(|t| *t != main_tree) {
@@ -992,13 +1002,17 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
 
         let mut ideas = Vec::new();
         for i in issues.iter().filter(|i| is(i, &idea_label) || is(i, LABEL_PROPOSED)) {
-            let merged = attempts
+            let merged_all: Vec<&Attempt> = attempts
                 .iter()
-                .rev()
-                .find(|a| a.idea == Some(i.number) && a.status == AttemptStatus::Merged);
+                .filter(|a| a.idea == Some(i.number) && a.status == AttemptStatus::Merged)
+                .collect();
+            let merged = merged_all.last().copied();
+            let saved: i64 = merged_all.iter().filter_map(|a| a.delta).sum();
             let open_pr = prs.iter().find(|p| idea_ref(&p.body) == Some(i.number));
             let claim = ledger.claims.get(&i.number);
-            let status = if merged.is_some() {
+            // An idea is done when it is closed and something merged for it;
+            // while it is open there may be more to do.
+            let status = if merged.is_some() && !i.open {
                 IdeaStatus::Done
             } else if !i.open {
                 IdeaStatus::Closed
@@ -1018,7 +1032,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 claimed_by: claim.map(|c| c.login.clone()).or(open_pr.map(|p| p.author.clone())),
                 lease_expires: claim.map(|c| c.at + lease),
                 pr: merged.map(|a| a.pr).or(open_pr.map(|p| p.number)),
-                result_delta: merged.and_then(|a| a.delta),
+                result_delta: merged.map(|_| saved),
                 created_at: i.created_at,
                 url: i.url.clone(),
                 technique: parsed.as_ref().map(|p| p.0.clone()),
@@ -1706,8 +1720,13 @@ mod tests {
         m.prs[0].body = "Shorter proof.\n\nIdea: #7".into();
         m.reviews.insert(1, vec![approve("bob", &head(1))]);
         let out = run(&mut m, &mut Ledger::default(), &[]);
-        assert_eq!(out.ideas[0].status, IdeaStatus::Done);
+        assert_eq!(out.ideas[0].status, IdeaStatus::Open, "open until someone closes it: more may remain");
         assert_eq!(out.ideas[0].result_delta, Some(-100));
+        assert!(m.posted.iter().any(|(n, body)| *n == 7 && body.contains("#1 merged")));
+        m.issues[0].open = false;
+        m.prs.clear();
+        let out = run(&mut m, &mut Ledger::default(), &out.decided);
+        assert_eq!(out.ideas[0].status, IdeaStatus::Done);
     }
 
     #[test]
