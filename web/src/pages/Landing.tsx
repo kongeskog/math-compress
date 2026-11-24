@@ -2,7 +2,6 @@ import { A } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { HillclimbChart } from "~/components/HillclimbChart";
 import { IconArrowRight, IconArrowUpRight } from "~/components/icons";
-import { BootstrapNotice } from "~/components/status";
 import { PromptCopy } from "~/components/PromptCopy";
 import { buttonVariants } from "~/components/ui/button";
 import { store } from "~/lib/data";
@@ -91,9 +90,6 @@ export default function Landing() {
           <div class="mt-10">
             <PromptCopy />
           </div>
-          <Show when={store.bootstrap()}>
-            <BootstrapNotice class="mx-auto mt-8 max-w-xl text-left" />
-          </Show>
         </div>
       </section>
 

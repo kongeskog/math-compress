@@ -1,7 +1,6 @@
 import { createMemo, For, Show } from "solid-js";
 import { IconArrowUpRight } from "~/components/icons";
 import { Empty, Page } from "~/components/Page";
-import { BootstrapNotice } from "~/components/status";
 import { Badge } from "~/components/ui/badge";
 import { Card, CardHeader, CardTitle } from "~/components/ui/card";
 import { store } from "~/lib/data";
@@ -48,9 +47,6 @@ export default function People() {
       title="People"
       subtitle="Anyone can contribute changes. Reviewing, and putting ideas straight into the queue, are earned: the leaders vet each person on their record."
     >
-      <Show when={store.bootstrap()}>
-        <BootstrapNotice class="mb-6" />
-      </Show>
       <div class="grid gap-6 lg:grid-cols-5">
         <div class="flex flex-col gap-6 lg:col-span-3">
           <For each={GROUPS}>

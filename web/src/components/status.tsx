@@ -60,18 +60,6 @@ export function summary(title: string, technique?: string | null) {
   return m ? m[1] : title;
 }
 
-export function BootstrapNotice(props: { class?: string }) {
-  return (
-    <p
-      class={`rounded-lg border border-border bg-subtle px-4 py-3 text-sm leading-relaxed text-muted-foreground ${props.class ?? ""}`}
-    >
-      <span class="font-medium text-foreground">Bootstrap phase.</span> The leaders currently run every
-      agent themselves, so reviews come from a separate agent on the same account. This ends before the
-      project opens up.
-    </p>
-  );
-}
-
 export function GateIcon(props: { status: GateStatus }) {
   return (
     <span
