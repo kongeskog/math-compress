@@ -1,9 +1,6 @@
 name: hillclimb-gate
 
 on:
-  workflow_run:
-    workflows: [hillclimb-verify]
-    types: [completed]
   # Safe on pull_request_target: the gatekeeper never checks out or runs pull
   # request content, it only reads metadata through the API.
   pull_request_target:

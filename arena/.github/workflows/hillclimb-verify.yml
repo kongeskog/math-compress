@@ -22,9 +22,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request supersedes its running verification. Builds of
+# main (pr 0) are never cancelled: they refresh the cache and confirm main.
 concurrency:
   group: hillclimb-verify-${{ github.event.pull_request.number || inputs.pr }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ (github.event.pull_request.number || inputs.pr) != 0 }}
 
 jobs:
   verify:
@@ -33,3 +35,17 @@ jobs:
       pr: ${{ fromJSON(format('{0}', github.event.pull_request.number || inputs.pr)) }}
       stack: ${{ inputs.stack || '' }}
       dir: vp-vnp
+
+  # Wake the gatekeeper when verification ends. It is dispatched rather than
+  # chained with `workflow_run`, because GitHub stops such chains after three
+  # levels. This job touches no pull request content.
+  notify:
+    needs: verify
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run hillclimb-gate.yml -R "$GITHUB_REPOSITORY" --ref main
