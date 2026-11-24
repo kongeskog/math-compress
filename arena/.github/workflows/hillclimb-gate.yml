@@ -22,5 +22,22 @@ permissions:
   actions: write
 
 jobs:
+  # A pull request event only asks for a gatekeeper pass. The pass itself runs
+  # as a dispatched run, which is not attached to the pull request: passes
+  # queue behind one another and a waiting one is replaced by the next, and a
+  # replaced pass attached to a pull request would show there as a cancelled
+  # check although nothing went wrong. The pull request's real result is the
+  # `hillclimb/gate` status. This job touches no pull request content.
+  request:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run hillclimb-gate.yml -R "$GITHUB_REPOSITORY" --ref main
+
   gate:
+    if: github.event_name != 'pull_request_target'
     uses: kongeskog/math-compress/.github/workflows/gatekeeper.yml@main
