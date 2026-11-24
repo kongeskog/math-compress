@@ -78,7 +78,7 @@ jobs:
           git -C base worktree add --quiet --detach ../head "$base_sha"
           conflict=false
           git -C head -c user.name=hillclimb -c user.email=hillclimb@users.noreply.github.com \
-            -c core.hooksPath=/dev/null merge --quiet --no-ff --no-edit "$head_sha" || conflict=true
+            -c core.hooksPath=/dev/null -c filter.lfs.smudge= -c filter.lfs.process= -c filter.lfs.required=false merge --quiet --no-ff --no-edit "$head_sha" || conflict=true
           echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
           echo "conflict=$conflict" >> "$GITHUB_OUTPUT"
@@ -149,7 +149,7 @@ jobs:
           git -C work fetch --quiet --no-tags "$REPO_URL" "pull/$PR/head"
           # Build exactly the commit the static gates saw, even if the branch moved since.
           git -C work -c user.name=hillclimb -c user.email=hillclimb@users.noreply.github.com \
-            -c core.hooksPath=/dev/null merge --quiet --no-ff --no-edit "$HEAD_SHA"
+            -c core.hooksPath=/dev/null -c filter.lfs.smudge= -c filter.lfs.process= -c filter.lfs.required=false merge --quiet --no-ff --no-edit "$HEAD_SHA"
 
       - name: Free disk space
         run: |

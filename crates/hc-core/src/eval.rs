@@ -196,15 +196,34 @@ pub fn static_gates(cfg: &Config, base: &Measurement, head: &Measurement) -> Res
     });
 
     // scope
+    let counted = cfg.counted_set()?;
     let outside: Vec<String> = changed.iter().filter(|p| !p.starts_with(&prefix)).cloned().collect();
-    gates.push(if outside.is_empty() {
+    // Inside the project only measured source files may change, and never
+    // through a symbolic link: everything that is compiled must be counted.
+    let unmeasured: Vec<String> = changed
+        .iter()
+        .filter(|p| p.strip_prefix(&prefix).is_some_and(|rel| !counted.is_match(rel)))
+        .cloned()
+        .collect();
+    let links: Vec<String> = changed
+        .iter()
+        .filter(|p| head.tree.get(*p).is_some_and(|h| h.starts_with("symlink:")))
+        .cloned()
+        .collect();
+    let mut problems = Vec::new();
+    if !outside.is_empty() {
+        problems.push(format!("Files outside `{}` changed: {}", cfg.project.dir, list(&outside, 5)));
+    }
+    if !unmeasured.is_empty() {
+        problems.push(format!("Only source files may change: {}", list(&unmeasured, 5)));
+    }
+    if !links.is_empty() {
+        problems.push(format!("Symbolic links are not allowed: {}", list(&links, 5)));
+    }
+    gates.push(if problems.is_empty() {
         Gate::new("scope", GateStatus::Pass, format!("{} files changed", changed.len()))
     } else {
-        Gate::new(
-            "scope",
-            GateStatus::Fail,
-            format!("Files outside `{}` changed: {}", cfg.project.dir, list(&outside, 5)),
-        )
+        Gate::new("scope", GateStatus::Fail, problems.join("; "))
     });
 
     // deny
@@ -408,6 +427,26 @@ mod tests {
             (".github/workflows/x.yml", "on: push"),
         ]);
         assert_eq!(status(&g, "frozen"), GateStatus::Fail);
+        assert_eq!(status(&g, "scope"), GateStatus::Fail);
+    }
+
+    #[test]
+    fn only_source_files_may_change_and_never_through_links() {
+        let g = gates(&[
+            ("proj/Statement.lean", STATEMENT),
+            ("proj/A.lean", "theorem a : True := trivial\n"),
+            ("proj/notes.bin", "x"),
+            ("README.md", "x"),
+        ]);
+        assert_eq!(status(&g, "scope"), GateStatus::Fail);
+
+        let c = cfg();
+        let base = checkout(&[("proj/Statement.lean", STATEMENT), ("proj/A.lean", BASE), ("other/Big.lean", BASE)]);
+        let head = checkout(&[("proj/Statement.lean", STATEMENT), ("proj/A.lean", "theorem a : True := trivial\n"), ("other/Big.lean", BASE)]);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("../other/Big.lean", head.join("proj/B.lean")).unwrap();
+        let g = static_gates(&c, &measure(&base, &c).unwrap(), &measure(&head, &c).unwrap()).unwrap();
+        #[cfg(unix)]
         assert_eq!(status(&g, "scope"), GateStatus::Fail);
     }
 
