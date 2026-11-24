@@ -89,11 +89,17 @@ impl GhForge {
         let run = self.get(&format!("actions/runs/{run_id}"))?;
         let event = s(&run, "event");
         let same_repo = |k: &str| run.get(k).map(|r| s(r, "full_name")) == Some(self.repo.clone());
-        let ok = (event == "pull_request_target" || event == "workflow_dispatch")
-            && s(&run, "path").starts_with(&format!(".github/workflows/{}", self.workflow))
-            && s(&run, "head_branch") == self.branch
-            && same_repo("repository")
-            && same_repo("head_repository");
+        let our_workflow = s(&run, "path").starts_with(&format!(".github/workflows/{}", self.workflow))
+            && same_repo("repository");
+        let ok = our_workflow
+            && match event.as_str() {
+                // Always runs the definition from the base branch, whatever the
+                // head is; the head may be a fork.
+                "pull_request_target" => true,
+                // Only people with write access can dispatch; it must be from main.
+                "workflow_dispatch" => s(&run, "head_branch") == self.branch && same_repo("head_repository"),
+                _ => false,
+            };
         Ok(ok.then(|| s(&run, "html_url")))
     }
 }
