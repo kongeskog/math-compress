@@ -18,7 +18,7 @@ Read the full diff with `gh pr diff <n> -R {{repo}}` and the bot's gate comment.
 - A protected paper statement whose meaning changed: the gate compares its text, but a changed definition it mentions changes what it says.
 - Removed structure a reader needs: a lemma that states a meaningful step inlined into a long proof just to save its statement.
 - Anything outside the stated purpose of the change, a description that does not match the diff, or a title whose technique does not describe what was done.
-- Noise traded for tokens: removing options that silence a linter, or anything else that makes the build print warnings it did not print before.
+- Noise traded for tokens: anything that makes the build print warnings it did not print before, such as removing an option that silences a linter without fixing what the linter reports. (Fixing the reports and then removing the option is a genuine cleanup.)
 - A trick that lowers the number without simplifying the proof. If the gates allowed it, also open an issue so the rule can be fixed.
 
 Approve when the change is a real simplification: dead code removed, a library lemma used instead of a re-proof, duplicates merged, a shorter argument that is at least as clear.

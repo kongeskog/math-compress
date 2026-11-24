@@ -544,21 +544,34 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
 
         let mut latest: BTreeMap<String, &ReviewInfo> = BTreeMap::new();
         let mut unvetted = BTreeSet::new();
-        for v in &verdicts {
+        for (i, v) in verdicts.iter().enumerate() {
             let own = v.user.eq_ignore_ascii_case(&pr.author);
             // While bootstrapping, the leaders run every agent from their own
             // account, so a leader's verdict counts on that account's changes.
-            let eligible =
-                roles.can_review(&v.user) && (!own || (roles.bootstrap && roles.is_leader(&v.user)));
+            let bootstrap_own = own && roles.bootstrap && roles.is_leader(&v.user);
+            let eligible = roles.can_review(&v.user) && (!own || bootstrap_own);
+            let user = v.user.to_lowercase();
             match v.state.as_str() {
+                // In that phase separate reviews by separate agents arrive
+                // from the one account, so each approval is its own verdict;
+                // a request for changes withdraws them all and blocks until
+                // a later review approves.
+                "APPROVED" if bootstrap_own => {
+                    latest.remove(&user);
+                    latest.insert(format!("{user}#{i}"), v);
+                }
+                "CHANGES_REQUESTED" if bootstrap_own => {
+                    latest.retain(|k, _| !k.starts_with(&format!("{user}#")));
+                    latest.insert(user, v);
+                }
                 "APPROVED" | "CHANGES_REQUESTED" if eligible => {
-                    latest.insert(v.user.to_lowercase(), v);
+                    latest.insert(user, v);
                 }
                 "APPROVED" if !own => {
                     unvetted.insert(v.user.clone());
                 }
                 "DISMISSED" => {
-                    latest.remove(&v.user.to_lowercase());
+                    latest.remove(&user);
                 }
                 _ => {}
             }
@@ -584,13 +597,19 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         }
         if approvals.len() as u32 >= needed {
             let own = approvals.iter().any(|a| a.eq_ignore_ascii_case(&pr.author));
+            let count = approvals.len();
+            approvals.dedup();
             return Ok(Gate::new(
                 "review",
                 GateStatus::Pass,
                 format!(
                     "Approved by {}{}",
                     approvals.join(", "),
-                    if own { " (bootstrap phase: reviewed by a separate agent of the same account)" } else { "" }
+                    if own {
+                        format!(" (bootstrap phase: {count} separate review(s) by agents of the same account)")
+                    } else {
+                        String::new()
+                    }
                 ),
             ));
         }
@@ -1324,6 +1343,33 @@ mod tests {
         assert_eq!(m.merged, [1]);
         let review = out.decided[0].gates.iter().find(|g| g.key == "review").unwrap();
         assert!(review.detail.as_deref().unwrap().contains("bootstrap"));
+    }
+
+    #[test]
+    fn large_changes_need_two_reviews_also_while_bootstrapping() {
+        let mut c = cfg();
+        c.roles.bootstrap = true;
+        let mut m = green();
+        m.prs[0].author = "lead".into();
+        m.results.get_mut(&key(1, &head(1))).unwrap().changed_files = 30;
+        m.pr_comments.insert(1, vec![says(1, "lead", "/approve head1abcdef", 0)]);
+        run_with(&mut m, &c, &mut Ledger::default(), &mut roles(), &[]);
+        assert!(m.merged.is_empty(), "one review is not enough for a large change");
+
+        // A second, separate review arrives; a request for changes in between would reset the count.
+        m.pr_comments.insert(
+            1,
+            vec![
+                says(1, "lead", "/approve head1abcdef", 0),
+                says(1, "lead", "/request-changes", 1),
+                says(1, "lead", "/approve head1abcdef", 2),
+            ],
+        );
+        run_with(&mut m, &c, &mut Ledger::default(), &mut roles(), &[]);
+        assert!(m.merged.is_empty());
+        m.pr_comments.get_mut(&1).unwrap().push(says(1, "lead", "/approve head1abcdef", 3));
+        run_with(&mut m, &c, &mut Ledger::default(), &mut roles(), &[]);
+        assert_eq!(m.merged, [1]);
     }
 
     #[test]
