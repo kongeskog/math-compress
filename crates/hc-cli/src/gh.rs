@@ -253,6 +253,28 @@ impl Forge for GhForge {
         Ok(out)
     }
 
+    fn current_verifies(&mut self) -> Result<BTreeSet<u64>> {
+        // A run reads main when it starts, so one created before main's
+        // latest commit is about an older main.
+        let head = self.get(&format!("commits/{}", self.branch))?;
+        let moved = time(&head["commit"]["committer"], "date");
+        let mut out = BTreeSet::new();
+        for status in ["queued", "in_progress", "pending"] {
+            let runs = self.get(&format!(
+                "actions/workflows/{}/runs?status={status}&per_page=100",
+                self.workflow
+            ))?;
+            for run in runs["workflow_runs"].as_array().into_iter().flatten() {
+                if time(run, "created_at") >= moved {
+                    if let Some(n) = pr_number(&s(run, "display_title")) {
+                        out.insert(n);
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
     fn dispatch_verify(&mut self, pr: u64, stack: &[u64]) -> Result<()> {
         let stack = stack.iter().map(u64::to_string).collect::<Vec<_>>().join(" ");
         if self.dry_run {

@@ -160,7 +160,10 @@ jobs:
   build:
     name: build and check proofs
     needs: static
-    if: always() && (inputs.pr == 0 || needs.static.outputs.ok == 'true')
+    # `!cancelled()`, not `always()`: a job that runs "always" keeps running
+    # after its run is cancelled, and a superseded verification would hold up
+    # the one that replaces it until it had built everything.
+    if: ${{ !cancelled() && (inputs.pr == 0 || needs.static.outputs.ok == 'true') }}
     runs-on: ${{ inputs.runner }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
@@ -196,11 +199,6 @@ jobs:
               merge --quiet --no-ff --no-edit "$sha"
           done
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
-          df -h /
-
       - name: Install elan and the pinned toolchain
         working-directory: work/${{ inputs.dir }}
         run: |
@@ -225,8 +223,10 @@ jobs:
           fi
 
       # Restored from builds of main only; pull request builds never save.
+      # A build of main starts from the previous verified build of main too:
+      # the build tool recompiles whatever changed, and the proof check below
+      # replays everything regardless.
       - name: Restore main's build
-        if: inputs.pr != 0
         uses: actions/cache/restore@v4
         with:
           path: work/${{ inputs.dir }}/.lake/build
@@ -299,7 +299,7 @@ jobs:
         run: exit 1
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ !cancelled() }}
         with:
           name: hillclimb-logs
           path: |
@@ -311,7 +311,7 @@ jobs:
   result:
     name: publish result
     needs: [static, build]
-    if: always() && inputs.pr != 0 && needs.static.result == 'success'
+    if: ${{ !cancelled() && inputs.pr != 0 && needs.static.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

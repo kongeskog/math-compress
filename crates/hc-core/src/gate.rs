@@ -97,6 +97,11 @@ pub trait Forge {
     fn verify_results(&mut self, pr: u64, head_sha: &str) -> Result<Vec<VerifyResult>>;
     /// Pull requests that have a verify run queued or in progress.
     fn active_verifies(&mut self) -> Result<BTreeSet<u64>>;
+    /// The subset of those whose run started after main last changed, so its
+    /// result will be about today's main. A forge that cannot tell says all.
+    fn current_verifies(&mut self) -> Result<BTreeSet<u64>> {
+        self.active_verifies()
+    }
     /// Verify `pr` on top of main with the pull requests in `stack` applied
     /// first, in order. `pr == 0` builds main itself.
     fn dispatch_verify(&mut self, pr: u64, stack: &[u64]) -> Result<()>;
@@ -205,6 +210,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         // Approved, passing changes that wait for re-verification, in order.
         let mut ahead: Vec<u64> = Vec::new();
         let active = self.forge.active_verifies()?;
+        let current = self.forge.current_verifies()?;
         let mut prs = self.forge.open_prs()?;
         prs.retain(|p| p.base_ref == self.cfg.project.branch && !p.draft);
         prs.sort_by_key(|p| p.number);
@@ -283,12 +289,25 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 // Not verified yet. Re-dispatch if the automatic trigger was lost.
                 attempt.gates = pending_gates(&format, &review);
                 let k = key(pr.number, &pr.head_sha);
+                // Approved before its first result: it joins the line now and is
+                // verified on top of the changes ahead of it, so that the line
+                // merges as one train. Its own run on main alone keeps going and
+                // is what decides if the change fails. Nothing more is needed
+                // when that run is already about today's main and nothing is ahead.
+                let mut joined = false;
+                if review.status == GateStatus::Pass && format_ok {
+                    let alone_on_main = current.contains(&pr.number) && ahead.is_empty();
+                    if !alone_on_main {
+                        joined = self.dispatch_stacked(pr, &prs, &ahead, &main_tree, ledger, &mut out.log)?;
+                    }
+                    ahead.push(pr.number);
+                }
                 let waited = self.now - pr.created_at > Duration::minutes(20);
                 let recently = ledger
                     .dispatched
                     .get(&k)
                     .is_some_and(|t| self.now - *t < Duration::hours(3));
-                if !active.contains(&pr.number) && waited && !recently {
+                if !joined && !active.contains(&pr.number) && waited && !recently {
                     self.forge.dispatch_verify(pr.number, &[])?;
                     ledger.dispatched.insert(k, self.now);
                     out.log.push(format!("#{}: dispatched verification", pr.number));
@@ -377,23 +396,11 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 if approved && format_ok {
                     // Verify on top of the approved changes ahead of this one,
                     // so the whole line can merge without a rebuild per merge.
-                    let stack: Vec<u64> = ahead.iter().copied().take(MAX_STACK).collect();
-                    if !active.contains(&pr.number) && ahead.len() <= MAX_STACK {
-                        let heads: Vec<String> = stack
-                            .iter()
-                            .map(|n| prs.iter().find(|p| p.number == *n).map(|p| key(*n, &p.head_sha)).unwrap_or_default())
-                            .collect();
-                        let k = format!("{}@{}@{}", key(pr.number, &pr.head_sha), main_tree, heads.join("+"));
-                        if !ledger.dispatched.contains_key(&k) {
-                            self.forge.dispatch_verify(pr.number, &stack)?;
-                            ledger.dispatched.insert(k, self.now);
-                            out.log.push(if stack.is_empty() {
-                                format!("#{}: re-verifying on new main", pr.number)
-                            } else {
-                                format!("#{}: verifying on top of {:?}", pr.number, stack)
-                            });
-                        }
-                    }
+                    // It is dispatched at once, in order, even while an older run
+                    // of this change is still going: that run is about a main
+                    // that no longer exists, and waiting for it would let the
+                    // line form in the order results happen to arrive.
+                    self.dispatch_stacked(pr, &prs, &ahead, &main_tree, ledger, &mut out.log)?;
                     ahead.push(pr.number);
                 }
                 self.forge.set_label(pr.number, LABEL_READY, !approved)?;
@@ -542,6 +549,39 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
             )
         };
         (gate, parsed)
+    }
+
+    /// Verify `pr` on today's main with the approved changes ahead of it
+    /// applied first. Dispatched once per main, head and line ahead; a longer
+    /// line than `MAX_STACK` waits for the front to merge.
+    fn dispatch_stacked(
+        &mut self,
+        pr: &PullRequest,
+        prs: &[PullRequest],
+        ahead: &[u64],
+        main_tree: &str,
+        ledger: &mut Ledger,
+        log: &mut Vec<String>,
+    ) -> Result<bool> {
+        if ahead.len() > MAX_STACK {
+            return Ok(false);
+        }
+        let heads: Vec<String> = ahead
+            .iter()
+            .map(|n| prs.iter().find(|p| p.number == *n).map(|p| key(*n, &p.head_sha)).unwrap_or_default())
+            .collect();
+        let k = format!("{}@{}@{}", key(pr.number, &pr.head_sha), main_tree, heads.join("+"));
+        if ledger.dispatched.contains_key(&k) {
+            return Ok(false);
+        }
+        self.forge.dispatch_verify(pr.number, ahead)?;
+        ledger.dispatched.insert(k, self.now);
+        log.push(if ahead.is_empty() {
+            format!("#{}: verifying on today's main", pr.number)
+        } else {
+            format!("#{}: verifying on top of {:?}", pr.number, ahead)
+        });
+        Ok(true)
     }
 
     /// Approvals count only from vetted reviewers and leaders. A verdict is
@@ -1144,6 +1184,8 @@ mod tests {
         pr_comments: BTreeMap<u64, Vec<CommentInfo>>,
         young: BTreeSet<String>,
         active: BTreeSet<u64>,
+        /// Active runs that started before main last changed.
+        obsolete: BTreeSet<u64>,
         issues: Vec<IssueInfo>,
         comments: Vec<CommentInfo>,
         merged: Vec<u64>,
@@ -1179,6 +1221,9 @@ mod tests {
         }
         fn active_verifies(&mut self) -> Result<BTreeSet<u64>> {
             Ok(self.active.clone())
+        }
+        fn current_verifies(&mut self) -> Result<BTreeSet<u64>> {
+            Ok(self.active.difference(&self.obsolete).copied().collect())
         }
         fn dispatch_verify(&mut self, pr: u64, stack: &[u64]) -> Result<()> {
             self.dispatched.push(pr);
@@ -1568,6 +1613,45 @@ mod tests {
             m.reviews.insert(n, vec![approve("bob", &head(n))]);
         }
         m
+    }
+
+    #[test]
+    fn approved_before_its_first_result_joins_the_line_at_once() {
+        // #1 has a stale result, #2 and #3 were approved while their first runs are going.
+        let mut m = two_stale();
+        m.results.remove(&key(2, &head(2)));
+        m.prs.push(pr(3, "alice"));
+        m.reviews.insert(3, vec![approve("bob", &head(3))]);
+        m.active.extend([1, 2, 3]);
+        m.obsolete.extend([1, 2]);
+        let mut ledger = Ledger::default();
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.stacks, [vec![], vec![1], vec![1, 2]], "one line, in order, without waiting for older runs");
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.dispatched.len(), 3, "once per main and line");
+
+        // The whole line was verified as a train and merges in one pass.
+        m.extra_results.push(on_tree(1, "tree:m0", &[], true));
+        m.extra_results.push(on_tree(2, "tree:merge1", &["1@head1abcdef"], true));
+        m.extra_results.push(on_tree(3, "tree:merge2", &["1@head1abcdef", "2@head2abcdef"], true));
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [1, 2, 3]);
+    }
+
+    #[test]
+    fn approved_change_alone_on_todays_main_is_not_verified_twice() {
+        let mut m = base();
+        m.prs.push(pr(1, "alice"));
+        m.reviews.insert(1, vec![approve("bob", &head(1))]);
+        m.active.insert(1);
+        let mut ledger = Ledger::default();
+        run(&mut m, &mut ledger, &[]);
+        assert!(m.dispatched.is_empty(), "its first run is already about today's main");
+
+        // Main moved under that run: verify on the new main without waiting for it.
+        m.obsolete.insert(1);
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.stacks, [Vec::<u64>::new()]);
     }
 
     fn on_tree(n: u64, base_tree: &str, stack: &[&str], pass: bool) -> VerifyResult {

@@ -23,11 +23,13 @@ permissions:
   contents: read
 
 # A new push to a pull request supersedes its running verification. Runs the
-# gatekeeper dispatches (re-verification, builds of main) never cancel one in
-# progress; they wait behind it.
+# gatekeeper dispatches (verification on top of the changes queued ahead) run
+# beside it, and a newer one supersedes an older one: the gatekeeper dispatches
+# again only when main or the queue ahead changed. A build of main (0) is never
+# cancelled; the next one waits behind it.
 concurrency:
-  group: hillclimb-verify-${{ github.event.pull_request.number || inputs.pr }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+  group: hillclimb-verify-${{ github.event.pull_request.number || inputs.pr }}-${{ github.event_name == 'pull_request_target' && 'own' || 'queued' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || inputs.pr != 0 }}
 
 jobs:
   verify:
