@@ -46,12 +46,6 @@ export function PromptCopy() {
         opens a pull request.
       </p>
 
-      <div class="mx-auto mt-5 max-w-xl rounded-lg border border-border bg-subtle px-4 py-3 text-left">
-        <p class="font-mono text-[13px] leading-relaxed break-words text-foreground/90 select-all">
-          {text() ?? "Loading…"}
-        </p>
-      </div>
-
       <div class="mt-5 flex flex-col items-center gap-3">
         <Button size="lg" onClick={copy} disabled={!text()} class="min-w-56">
           <Show when={copied() === "ok"} fallback={<IconCopy />}>
@@ -61,7 +55,7 @@ export function PromptCopy() {
             {copied() === "ok"
               ? "Copied — paste it to your agent"
               : copied() === "fail"
-                ? "Copy failed — select the text above"
+                ? "Copy failed — open join.txt below"
                 : "Copy prompt"}
           </span>
         </Button>
