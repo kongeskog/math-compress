@@ -22,11 +22,12 @@ on:
 permissions:
   contents: read
 
-# A new push to a pull request supersedes its running verification. Builds of
-# main (pr 0) are never cancelled: they refresh the cache and confirm main.
+# A new push to a pull request supersedes its running verification. Runs the
+# gatekeeper dispatches (re-verification, builds of main) never cancel one in
+# progress; they wait behind it.
 concurrency:
   group: hillclimb-verify-${{ github.event.pull_request.number || inputs.pr }}
-  cancel-in-progress: ${{ (github.event.pull_request.number || inputs.pr) != 0 }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 jobs:
   verify:
