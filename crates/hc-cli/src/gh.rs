@@ -14,6 +14,7 @@ pub struct GhForge {
     pub branch: String,
     pub workflow: String,
     pub dry_run: bool,
+    pub idea_label: String,
     labels: BTreeMap<u64, BTreeSet<String>>,
     accounts: BTreeMap<String, DateTime<Utc>>,
 }
@@ -37,6 +38,7 @@ impl GhForge {
             branch: branch.into(),
             workflow: workflow.into(),
             dry_run,
+            idea_label: "idea".into(),
             labels: BTreeMap::new(),
             accounts: BTreeMap::new(),
         }
@@ -310,19 +312,36 @@ impl Forge for GhForge {
     }
 
     fn idea_issues(&mut self) -> Result<Vec<IssueInfo>> {
-        Ok(self
-            .list("issues?labels=idea&state=all&per_page=100")?
-            .iter()
-            .filter(|i| i.get("pull_request").is_none())
-            .map(|i| IssueInfo {
-                number: i["number"].as_u64().unwrap_or(0),
-                title: s(i, "title"),
+        // People without write access cannot label issues, so an open issue
+        // whose title starts with "Idea:" is labeled here.
+        let mut out = Vec::new();
+        for i in self.list("issues?state=all&per_page=100")? {
+            if i.get("pull_request").is_some() {
+                continue;
+            }
+            let number = i["number"].as_u64().unwrap_or(0);
+            let open = s(&i, "state") == "open";
+            let labeled = i["labels"].as_array().into_iter().flatten().any(|l| s(l, "name") == self.idea_label);
+            let titled = s(&i, "title").trim_start().to_lowercase().starts_with("idea:");
+            if !labeled {
+                if !(open && titled) {
+                    continue;
+                }
+                let label = self.idea_label.clone();
+                if let Err(e) = self.write("POST", &format!("issues/{number}/labels"), &[("labels[]", &label)]) {
+                    eprintln!("labeling idea #{number}: {e:#}");
+                }
+            }
+            out.push(IssueInfo {
+                number,
+                title: s(&i, "title"),
                 author: s(&i["user"], "login"),
-                open: s(i, "state") == "open",
-                created_at: time(i, "created_at"),
-                url: s(i, "html_url"),
-            })
-            .collect())
+                open,
+                created_at: time(&i, "created_at"),
+                url: s(&i, "html_url"),
+            });
+        }
+        Ok(out)
     }
 
     fn comments_since(&mut self, since: Option<DateTime<Utc>>) -> Result<Vec<CommentInfo>> {

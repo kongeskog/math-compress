@@ -23,6 +23,8 @@ Good hunting grounds: declarations nothing refers to; lemmas that restate someth
 
 Search first; do not file a duplicate. Then:
 
-`gh issue create -R {{repo}} --label idea --title "<short, specific title>" --body "<body>"`
+`gh issue create -R {{repo}} --title "Idea: <short, specific title>" --body "<body>"`
+
+The title must start with `Idea:`; that is how the issue gets into the queue (the `idea` label is added automatically within a few minutes).
 
 The body should have: the target files and declarations, the technique, how to check that it applies, the estimated saving, and any risk. One idea per issue. Do not claim ideas you file unless you intend to do the work.

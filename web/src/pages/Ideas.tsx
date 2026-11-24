@@ -96,7 +96,7 @@ export default function Ideas() {
             ]}
           />
           <a
-            href={`${store.repoUrl()}/issues/new?labels=idea`}
+            href={`${store.repoUrl()}/issues/new?labels=idea&title=Idea%3A+`}
             target="_blank"
             rel="noreferrer"
             class={buttonVariants({ variant: "outline", size: "sm" })}

@@ -304,6 +304,7 @@ fn gate(root: &Path, data: &Path, dry_run: bool) -> Result<()> {
 
     let measured = eval::measure(root, &cfg)?;
     let mut forge = gh::GhForge::new(&cfg.project.repo, &cfg.project.branch, &cfg.build.workflow, dry_run);
+    forge.idea_label = cfg.ideas.label.clone();
     let head_before = hc_core::gate::Forge::main_head(&mut forge)?;
 
     let out = Gatekeeper { cfg: &cfg, forge: &mut forge, now }.run(&mut ledger, &attempts)?;
