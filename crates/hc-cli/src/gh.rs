@@ -288,6 +288,24 @@ impl Forge for GhForge {
         Ok(())
     }
 
+    fn cancel_verifies(&mut self, prs: &BTreeSet<u64>) -> Result<()> {
+        for status in ["queued", "in_progress"] {
+            let runs = self.get(&format!(
+                "actions/workflows/{}/runs?status={status}&per_page=100",
+                self.workflow
+            ))?;
+            for run in runs["workflow_runs"].as_array().into_iter().flatten() {
+                let Some(id) = run["id"].as_u64() else { continue };
+                if pr_number(&s(run, "display_title")).is_some_and(|n| n != 0 && prs.contains(&n)) {
+                    if let Err(e) = self.write("POST", &format!("actions/runs/{id}/cancel"), &[]) {
+                        eprintln!("could not cancel run {id}: {e:#}");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn reviews(&mut self, pr: u64) -> Result<Vec<ReviewInfo>> {
         Ok(self
             .list(&format!("pulls/{pr}/reviews?per_page=100"))?

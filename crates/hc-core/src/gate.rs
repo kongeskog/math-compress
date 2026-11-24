@@ -116,6 +116,8 @@ pub trait Forge {
     /// Verify `pr` on top of main with the pull requests in `stack` applied
     /// first, in order. `pr == 0` builds main itself.
     fn dispatch_verify(&mut self, pr: u64, stack: &[u64]) -> Result<()>;
+    /// Stop the verifications of these changes that are queued or running.
+    fn cancel_verifies(&mut self, prs: &BTreeSet<u64>) -> Result<()>;
     fn reviews(&mut self, pr: u64) -> Result<Vec<ReviewInfo>>;
     /// Every comment on a pull request written by a person.
     fn pr_comments(&mut self, pr: u64) -> Result<Vec<CommentInfo>>;
@@ -319,7 +321,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                     let alone_on_main = current.contains(&pr.number) && ahead.is_empty();
                     if !alone_on_main {
                         let line = Line { main: &main, main_tree: &main_tree, ahead: &ahead, active: &active, merged: &merged_heads };
-                        joined = self.dispatch_stacked(pr, &prs, &line, ledger, &mut out.log)?;
+                        joined = self.dispatch_stacked(pr, &prs, &line, &[], ledger, &mut out.log)?;
                         if joined {
                             queued_now.insert(pr.number);
                         }
@@ -425,7 +427,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                     // that no longer exists, and waiting for it would let the
                     // line form in the order results happen to arrive.
                     let line = Line { main: &main, main_tree: &main_tree, ahead: &ahead, active: &active, merged: &merged_heads };
-                    if self.dispatch_stacked(pr, &prs, &line, ledger, &mut out.log)? {
+                    if self.dispatch_stacked(pr, &prs, &line, &results, ledger, &mut out.log)? {
                         queued_now.insert(pr.number);
                     }
                     ahead.push(pr.number);
@@ -460,7 +462,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
             // them, so it takes its place at the end of the line instead.
             if ahead.iter().any(|a| active.contains(a) || queued_now.contains(a)) {
                 let line = Line { main: &main, main_tree: &main_tree, ahead: &ahead, active: &active, merged: &merged_heads };
-                if self.dispatch_stacked(pr, &prs, &line, ledger, &mut out.log)? {
+                if self.dispatch_stacked(pr, &prs, &line, &results, ledger, &mut out.log)? {
                     queued_now.insert(pr.number);
                 }
                 if let Some(g) = attempt.gates.iter_mut().find(|g| g.key == "fresh") {
@@ -538,6 +540,23 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         let open_numbers: BTreeSet<String> = prs.iter().map(|p| format!("{}@", p.number)).collect();
         ledger.dispatched.retain(|k, _| open_numbers.iter().any(|p| k.starts_with(p)));
         ledger.lines.retain(|k, _| open_numbers.iter().any(|p| k.starts_with(p)));
+        ledger.line_bases.retain(|k, _| open_numbers.iter().any(|p| k.starts_with(p)));
+
+        // A merged change needs no more verification: stop what is still
+        // running for it, so the runners go to the changes that wait.
+        let done: BTreeSet<u64> = past
+            .iter()
+            .chain(out.decided.iter())
+            .filter(|a| a.status == AttemptStatus::Merged && active.contains(&a.pr))
+            .map(|a| a.pr)
+            .filter(|n| prs.iter().all(|p| p.number != *n) || out.decided.iter().any(|a| a.pr == *n))
+            .collect();
+        if !done.is_empty() {
+            match self.forge.cancel_verifies(&done) {
+                Ok(()) => out.log.push(format!("stopped verification of merged changes {done:?}")),
+                Err(e) => out.log.push(format!("could not stop verification of {done:?}: {e:#}")),
+            }
+        }
 
         let mut all: Vec<Attempt> = past.to_vec();
         all.extend(out.decided.iter().cloned());
@@ -612,6 +631,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         pr: &PullRequest,
         prs: &[PullRequest],
         line: &Line,
+        results: &[VerifyResult],
         ledger: &mut Ledger,
         log: &mut Vec<String>,
     ) -> Result<bool> {
@@ -628,11 +648,17 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         if ledger.dispatched.contains_key(&k) {
             return Ok(false);
         }
-        // The run that is going was stacked on a longer line whose front has
-        // merged since, and nothing else has: it is building exactly today's
-        // main plus the line that is left, so it is not replaced.
-        if line.active.contains(&pr.number) {
-            if let Some(was) = ledger.lines.get(&id) {
+        // The latest run was stacked on a longer line whose front has merged
+        // since, and nothing else has: it is building, or has built, exactly
+        // today's main plus the line that is left, so it is not replaced. A
+        // run that ended counts only if it left a result for that line from
+        // the main it was dispatched on.
+        let base = ledger.line_bases.get(&id);
+        let built = |was: &Vec<String>| {
+            results.iter().any(|r| r.stack == *was && Some(&r.base_sha) == base)
+        };
+        if let Some(was) = ledger.lines.get(&id) {
+            if line.active.contains(&pr.number) || built(was) {
                 if was.len() > heads.len() && was.ends_with(&heads) {
                     let gone = &was[..was.len() - heads.len()];
                     let in_order = gone.iter().all(|h| line.merged.contains_key(h));
@@ -645,6 +671,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         }
         self.forge.dispatch_verify(pr.number, line.ahead)?;
         ledger.dispatched.insert(k, self.now);
+        ledger.line_bases.insert(id.clone(), line.main.to_string());
         ledger.lines.insert(id, heads);
         log.push(if line.ahead.is_empty() {
             format!("#{}: verifying on today's main", pr.number)
@@ -1259,6 +1286,7 @@ mod tests {
         issues: Vec<IssueInfo>,
         comments: Vec<CommentInfo>,
         merged: Vec<u64>,
+        cancelled: BTreeSet<u64>,
         dispatched: Vec<u64>,
         statuses: BTreeMap<String, CommitState>,
         posted: Vec<(u64, String)>,
@@ -1298,6 +1326,10 @@ mod tests {
         fn dispatch_verify(&mut self, pr: u64, stack: &[u64]) -> Result<()> {
             self.dispatched.push(pr);
             self.stacks.push(stack.to_vec());
+            Ok(())
+        }
+        fn cancel_verifies(&mut self, prs: &BTreeSet<u64>) -> Result<()> {
+            self.cancelled.extend(prs);
             Ok(())
         }
         fn reviews(&mut self, pr: u64) -> Result<Vec<ReviewInfo>> {
@@ -1777,6 +1809,50 @@ mod tests {
         run(&mut m, &mut ledger, &out.decided);
         assert_eq!(m.stacks.last().unwrap(), &Vec::<u64>::new());
         assert_eq!(m.dispatched.len(), 3);
+    }
+
+    #[test]
+    fn a_finished_run_stacked_on_a_line_whose_front_merged_is_not_repeated() {
+        // #2 was verified on main plus #1 before #1's own result arrived.
+        let mut m = two_stale();
+        let mut ledger = Ledger::default();
+        run(&mut m, &mut ledger, &[]);
+        m.extra_results.push(on_tree(2, "tree:merge1", &["1@head1abcdef"], true));
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.dispatched.len(), 2, "nothing to do until #1's result is in");
+
+        // #1 merges while #3, verified behind both, has its result already:
+        // that result is for main plus #2, which is what is left of the line.
+        m.prs.push(pr(3, "alice"));
+        m.reviews.insert(3, vec![approve("bob", &head(3))]);
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.stacks.last().unwrap(), &vec![1, 2]);
+        m.extra_results.push(on_tree(3, "tree:merge2", &["1@head1abcdef", "2@head2abcdef"], true));
+        m.extra_results.push(on_tree(1, "tree:m0", &[], true));
+        m.extra_results.retain(|r| r.pr != 2);
+        m.active.insert(2);
+        let out = run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [1]);
+        assert_eq!(m.dispatched.len(), 3, "#3's finished run is not repeated");
+        m.prs.remove(0);
+        run(&mut m, &mut ledger, &out.decided);
+        assert_eq!(m.dispatched.len(), 3);
+
+        // A result for the same line from another main does not count.
+        ledger.line_bases.insert(key(3, &head(3)), "elsewhere".into());
+        run(&mut m, &mut ledger, &out.decided);
+        assert_eq!(m.dispatched.len(), 4);
+    }
+
+    #[test]
+    fn verification_of_a_merged_change_is_stopped() {
+        let mut m = green();
+        m.reviews.insert(1, vec![approve("bob", &head(1))]);
+        m.active.extend([1, 2]);
+        m.prs.push(pr(2, "alice"));
+        run(&mut m, &mut Ledger::default(), &[]);
+        assert_eq!(m.merged, [1]);
+        assert_eq!(m.cancelled, BTreeSet::from([1]), "only the merged change's runs");
     }
 
     fn on_tree(n: u64, base_tree: &str, stack: &[&str], pass: bool) -> VerifyResult {

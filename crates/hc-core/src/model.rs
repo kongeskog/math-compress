@@ -289,6 +289,9 @@ pub struct Ledger {
     /// latest queued verification was stacked on.
     #[serde(default)]
     pub lines: BTreeMap<String, Vec<String>>,
+    /// `pr@head_sha` -> the commit of main that verification was dispatched on.
+    #[serde(default)]
+    pub line_bases: BTreeMap<String, String>,
     /// Alerts already raised, so each is raised once.
     #[serde(default)]
     pub alerts: std::collections::BTreeSet<String>,
