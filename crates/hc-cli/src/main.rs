@@ -49,6 +49,12 @@ enum Cmd {
         head_sha: String,
         #[arg(long, default_value = "")]
         base_sha: String,
+        /// Login of the pull request's author, for the open-change limit.
+        #[arg(long, default_value = "")]
+        author: String,
+        /// How many open pull requests that author has, including this one.
+        #[arg(long, default_value_t = 0)]
+        author_open_prs: usize,
         /// Write the result as JSON.
         #[arg(long)]
         out: Option<PathBuf>,
@@ -101,8 +107,8 @@ enum Outcome {
 fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Score { root, config, top, json } => score(&root, config, top, json),
-        Cmd::Eval { head, base, base_ref, pr, head_sha, base_sha, out } => {
-            eval_cmd(&head, base, &base_ref, pr, head_sha, base_sha, out)
+        Cmd::Eval { head, base, base_ref, pr, head_sha, base_sha, author, author_open_prs, out } => {
+            eval_cmd(&head, base, &base_ref, pr, head_sha, base_sha, &author, author_open_prs, out)
         }
         Cmd::Finalize { static_result, compiles, same_theorems, build_seconds, out } => {
             finalize(&static_result, compiles, same_theorems, build_seconds, &out)
@@ -160,6 +166,7 @@ fn export_ref(repo: &Path, reference: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn eval_cmd(
     head: &Path,
     base: Option<PathBuf>,
@@ -167,6 +174,8 @@ fn eval_cmd(
     pr: u64,
     head_sha: String,
     base_sha: String,
+    author: &str,
+    author_open_prs: usize,
     out: Option<PathBuf>,
 ) -> Result<()> {
     let (base_dir, temp) = match base {
@@ -185,7 +194,23 @@ fn eval_cmd(
         h.tree.retain(|p, _| b.tree.contains_key(p) || p.starts_with(&prefix) || tracked.contains(p));
         let _ = std::fs::remove_dir_all(&base_dir);
     }
-    let gates = eval::static_gates(&cfg, &b, &h)?;
+    let mut gates = eval::static_gates(&cfg, &b, &h)?;
+    if !author.is_empty() {
+        let exempt = cfg.roles.leaders.iter().any(|l| l.eq_ignore_ascii_case(author));
+        let limit = cfg.limits.max_open_prs;
+        gates.insert(
+            0,
+            if exempt || author_open_prs <= limit {
+                Gate::new("quota", GateStatus::Pass, "")
+            } else {
+                Gate::new(
+                    "quota",
+                    GateStatus::Fail,
+                    format!("{author} has {author_open_prs} open pull requests; the limit is {limit}. Close or finish one, then comment `/retry` here."),
+                )
+            },
+        );
+    }
     let changed = eval::changed_paths(&b, &h).len();
 
     print_metrics(&h.metrics, Some(&b.metrics));
@@ -301,13 +326,17 @@ fn gate(root: &Path, data: &Path, dry_run: bool) -> Result<()> {
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default();
     let mut attempts: Vec<Attempt> = read_jsonl(&attempts_path)?;
+    let roles_path = data.join("roles.json");
+    let mut roles: RolesState = std::fs::read_to_string(&roles_path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
 
     let measured = eval::measure(root, &cfg)?;
     let mut forge = gh::GhForge::new(&cfg.project.repo, &cfg.project.branch, &cfg.build.workflow, dry_run);
-    forge.idea_label = cfg.ideas.label.clone();
     let head_before = hc_core::gate::Forge::main_head(&mut forge)?;
 
-    let out = Gatekeeper { cfg: &cfg, forge: &mut forge, now }.run(&mut ledger, &attempts)?;
+    let out = Gatekeeper { cfg: &cfg, forge: &mut forge, now }.run(&mut ledger, &mut roles, &attempts)?;
     for line in &out.log {
         println!("{line}");
     }
@@ -386,6 +415,8 @@ fn gate(root: &Path, data: &Path, dry_run: bool) -> Result<()> {
     }
     std::fs::write(&state_path, serde_json::to_string_pretty(&state)?)?;
     std::fs::write(&ledger_path, serde_json::to_string_pretty(&ledger)?)?;
+    roles.members.sort_by(|a, b| a.role.cmp(&b.role).then(a.since.cmp(&b.since)));
+    std::fs::write(&roles_path, serde_json::to_string_pretty(&roles)?)?;
     let lines: Vec<String> = attempts.iter().map(serde_json::to_string).collect::<Result<_, _>>()?;
     std::fs::write(&attempts_path, lines.join("\n") + if lines.is_empty() { "" } else { "\n" })?;
     Ok(())

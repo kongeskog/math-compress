@@ -14,7 +14,7 @@ pub struct GhForge {
     pub branch: String,
     pub workflow: String,
     pub dry_run: bool,
-    pub idea_label: String,
+    comment_cache: BTreeMap<u64, Vec<Value>>,
     labels: BTreeMap<u64, BTreeSet<String>>,
     accounts: BTreeMap<String, DateTime<Utc>>,
 }
@@ -38,7 +38,7 @@ impl GhForge {
             branch: branch.into(),
             workflow: workflow.into(),
             dry_run,
-            idea_label: "idea".into(),
+            comment_cache: BTreeMap::new(),
             labels: BTreeMap::new(),
             accounts: BTreeMap::new(),
         }
@@ -85,6 +85,16 @@ impl GhForge {
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let text = self.gh(&refs)?;
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
+    /// All comments of an issue or pull request, fetched once per pass.
+    fn issue_comments(&mut self, number: u64) -> Result<Vec<Value>> {
+        if let Some(c) = self.comment_cache.get(&number) {
+            return Ok(c.clone());
+        }
+        let c = self.list(&format!("issues/{number}/comments?per_page=100"))?;
+        self.comment_cache.insert(number, c.clone());
+        Ok(c)
     }
 
     fn trusted_run(&self, run_id: u64) -> Result<Option<String>> {
@@ -249,7 +259,7 @@ impl Forge for GhForge {
     }
 
     fn upsert_comment(&mut self, pr: u64, body: &str) -> Result<()> {
-        let existing = self.list(&format!("issues/{pr}/comments?per_page=100"))?;
+        let existing = self.issue_comments(pr)?;
         let mine = existing
             .iter()
             .find(|c| s(c, "body").starts_with(COMMENT_MARKER) && s(&c["user"], "type") == "Bot");
@@ -311,37 +321,56 @@ impl Forge for GhForge {
         Ok(sha)
     }
 
-    fn idea_issues(&mut self) -> Result<Vec<IssueInfo>> {
-        // People without write access cannot label issues, so an open issue
-        // whose title starts with "Idea:" is labeled here.
+    fn issues(&mut self) -> Result<Vec<IssueInfo>> {
         let mut out = Vec::new();
         for i in self.list("issues?state=all&per_page=100")? {
             if i.get("pull_request").is_some() {
                 continue;
             }
             let number = i["number"].as_u64().unwrap_or(0);
-            let open = s(&i, "state") == "open";
-            let labeled = i["labels"].as_array().into_iter().flatten().any(|l| s(l, "name") == self.idea_label);
-            let titled = s(&i, "title").trim_start().to_lowercase().starts_with("idea:");
-            if !labeled {
-                if !(open && titled) {
-                    continue;
-                }
-                let label = self.idea_label.clone();
-                if let Err(e) = self.write("POST", &format!("issues/{number}/labels"), &[("labels[]", &label)]) {
-                    eprintln!("labeling idea #{number}: {e:#}");
-                }
-            }
+            let labels: Vec<String> =
+                i["labels"].as_array().map(|a| a.iter().map(|l| s(l, "name")).collect()).unwrap_or_default();
+            self.labels.insert(number, labels.iter().cloned().collect());
             out.push(IssueInfo {
                 number,
                 title: s(&i, "title"),
+                body: s(&i, "body"),
                 author: s(&i["user"], "login"),
-                open,
+                open: s(&i, "state") == "open",
+                labels,
                 created_at: time(&i, "created_at"),
                 url: s(&i, "html_url"),
             });
         }
         Ok(out)
+    }
+
+    fn pr_comments(&mut self, pr: u64) -> Result<Vec<CommentInfo>> {
+        Ok(self
+            .issue_comments(pr)?
+            .iter()
+            .filter(|c| s(&c["user"], "type") != "Bot")
+            .map(|c| CommentInfo {
+                issue: pr,
+                user: s(&c["user"], "login"),
+                body: s(c, "body"),
+                created_at: time(c, "created_at"),
+            })
+            .collect())
+    }
+
+    fn create_issue(&mut self, title: &str, body: &str, label: &str) -> Result<(u64, String)> {
+        if self.dry_run {
+            eprintln!("dry-run: create issue {title}");
+            return Ok((0, String::new()));
+        }
+        let v = self.write("POST", "issues", &[("title", title), ("body", body), ("labels[]", label)])?;
+        Ok((v["number"].as_u64().unwrap_or(0), s(&v, "html_url")))
+    }
+
+    fn close_issue(&mut self, issue: u64) -> Result<()> {
+        self.write("PATCH", &format!("issues/{issue}"), &[("state", "closed")])?;
+        Ok(())
     }
 
     fn comments_since(&mut self, since: Option<DateTime<Utc>>) -> Result<Vec<CommentInfo>> {

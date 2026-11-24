@@ -27,6 +27,9 @@ pub struct Measurement {
     pub deny: BTreeMap<String, DenyCount>,
     pub long_lines: u64,
     pub long_line_samples: Vec<String>,
+    /// Protect rule name -> declaration names found.
+    #[serde(default)]
+    pub protected: BTreeMap<String, std::collections::BTreeSet<String>>,
     /// Repo-relative path -> content hash, for every file in the checkout.
     #[serde(skip)]
     pub tree: BTreeMap<String, String>,
@@ -84,6 +87,12 @@ pub fn measure(root: &Path, cfg: &Config) -> Result<Measurement> {
         .map(|(i, r)| Ok((i, Regex::new(&r.pattern)?)))
         .collect::<Result<_>>()?;
 
+    let protect: Vec<(String, Regex)> = cfg
+        .protect
+        .iter()
+        .map(|r| Ok((r.name.clone(), Regex::new(&r.pattern)?)))
+        .collect::<Result<_>>()?;
+
     let mut m = Measurement::default();
     for rule in &cfg.deny {
         m.deny.insert(rule.name.clone(), DenyCount::default());
@@ -112,6 +121,15 @@ pub fn measure(root: &Path, cfg: &Config) -> Result<Measurement> {
                 m.long_lines += 1;
                 if m.long_line_samples.len() < 5 {
                     m.long_line_samples.push(format!("{}:{}", path, n + 1));
+                }
+            }
+        }
+
+        for (name, re) in &protect {
+            let set = m.protected.entry(name.clone()).or_default();
+            for cap in re.captures_iter(&code) {
+                if let Some(g) = cap.get(1) {
+                    set.insert(g.as_str().to_string());
                 }
             }
         }
@@ -208,6 +226,15 @@ pub fn static_gates(cfg: &Config, base: &Measurement, head: &Measurement) -> Res
             if h.max_value > max {
                 problems.push(format!("`{}` value {} exceeds the cap {}", rule.name, h.max_value, max));
             }
+        }
+    }
+    for rule in &cfg.protect {
+        let empty = std::collections::BTreeSet::new();
+        let b = base.protected.get(&rule.name).unwrap_or(&empty);
+        let h = head.protected.get(&rule.name).unwrap_or(&empty);
+        let gone: Vec<String> = b.difference(h).cloned().collect();
+        if !gone.is_empty() {
+            problems.push(format!("protected declarations removed ({}): {}", rule.name, list(&gone, 5)));
         }
     }
     if head.long_lines > base.long_lines {
@@ -414,6 +441,25 @@ mod tests {
             ("README.md", "x"),
         ]);
         assert_eq!(status(&g, "deny"), GateStatus::Pass);
+    }
+
+    #[test]
+    fn removing_a_protected_declaration_fails_but_rewriting_it_passes() {
+        let mut c = cfg();
+        c.protect.push(crate::config::ProtectRule {
+            name: "paper".into(),
+            pattern: r"(?m)^\s*theorem (thm_\w+)".into(),
+            description: String::new(),
+        });
+        let base_src = "theorem thm_main : True := by\n  trivial\n\ntheorem helper : True := by\n  exact thm_main\n";
+        let run = |head_src: &str| {
+            let base = checkout(&[("proj/A.lean", base_src)]);
+            let head = checkout(&[("proj/A.lean", head_src)]);
+            let g = static_gates(&c, &measure(&base, &c).unwrap(), &measure(&head, &c).unwrap()).unwrap();
+            status(&g, "deny")
+        };
+        assert_eq!(run("theorem helper : True := trivial\n"), GateStatus::Fail);
+        assert_eq!(run("theorem thm_main : True := trivial\n"), GateStatus::Pass);
     }
 
     #[test]

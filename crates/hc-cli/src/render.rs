@@ -34,7 +34,7 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
         .join(", ");
     let build = p.local_build.iter().map(|c| format!("   `{c}`")).collect::<Vec<_>>().join("\n");
     let theorems = p.theorems.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>().join(", ");
-    let vars: [(&str, String); 16] = [
+    let vars: [(&str, String); 22] = [
         ("title", p.title.clone()),
         ("repo", p.repo.clone()),
         ("dir", p.dir.clone()),
@@ -51,6 +51,18 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
         ("lease_hours", cfg.ideas.lease_hours.to_string()),
         ("review_required", cfg.review.required.to_string()),
         ("review_large", cfg.review.required_large.to_string()),
+        ("title_format", cfg.format.title_help()),
+        (
+            "techniques",
+            bullets(cfg.format.techniques.iter().map(|t| format!("`{}`: {}", t.key, t.description))),
+        ),
+        (
+            "protect",
+            bullets(cfg.protect.iter().map(|p| if p.description.is_empty() { p.name.clone() } else { p.description.clone() })),
+        ),
+        ("max_open_prs", cfg.limits.max_open_prs.to_string()),
+        ("reviewer_min_merged", cfg.roles.reviewer_min_merged.to_string()),
+        ("ideator_min_merged", cfg.roles.ideator_min_merged.to_string()),
     ];
     let mut out = template.to_string();
     for (k, v) in vars {
@@ -76,6 +88,31 @@ pub fn site_files(cfg: &Config, out: &Path, site: &str) -> Result<()> {
             "mode": match d.mode { DenyMode::Forbid => "forbid", DenyMode::NoIncrease => "no_increase" },
             "description": d.description.replace('`', ""),
         })).collect::<Vec<_>>(),
+        "protect": cfg.protect.iter().map(|d| json!({"name": d.name, "description": d.description})).collect::<Vec<_>>(),
+        "techniques": cfg.format.techniques,
+        "title_format": cfg.format.title_help().replace('`', ""),
+        "roles": {
+            "bootstrap": cfg.roles.bootstrap,
+            "leaders": cfg.roles.leaders,
+            "reviewer_min_merged": cfg.roles.reviewer_min_merged,
+            "ideator_min_merged": cfg.roles.ideator_min_merged,
+            "leader_min_merged": cfg.roles.leader_min_merged,
+            "endorsements": cfg.roles.endorsements,
+            "leader_endorsements": cfg.roles.leader_endorsements,
+        },
+        "commands": [
+            {"command": "/claim", "who": "anyone", "where": "a queued idea", "does": "Reserve the idea for a few hours."},
+            {"command": "/unclaim", "who": "the claimant", "where": "the idea", "does": "Release the claim."},
+            {"command": "/retry", "who": "the author or a leader", "where": "a pull request", "does": "Run verification again."},
+            {"command": "/approve <commit>", "who": "reviewers and leaders", "where": "a pull request", "does": "Approve exactly that commit."},
+            {"command": "/request-changes <reason>", "who": "reviewers and leaders", "where": "a pull request", "does": "Block the change until the same reviewer approves."},
+            {"command": "/accept", "who": "ideators and leaders", "where": "a proposed idea", "does": "Put the idea into the queue."},
+            {"command": "/decline", "who": "ideators and leaders", "where": "a proposed idea or an application", "does": "Close it; give the reason in the same comment."},
+            {"command": "/apply reviewer|ideator|leader", "who": "anyone with enough merged changes", "where": "any issue", "does": "Open an application for leaders to judge."},
+            {"command": "/endorse", "who": "leaders", "where": "an application", "does": "Support the application."},
+            {"command": "/grant @login reviewer|ideator", "who": "leaders", "where": "any issue", "does": "Give a role directly."},
+            {"command": "/revoke @login <role>", "who": "leaders", "where": "any issue", "does": "Take a role away."},
+        ],
         "settings": {
             "Primary metric": cfg.score.primary,
             "Minimum improvement": cfg.score.min_delta,
@@ -83,7 +120,8 @@ pub fn site_files(cfg: &Config, out: &Path, site: &str) -> Result<()> {
             "Approvals required": cfg.review.required,
             "Approvals for large changes": cfg.review.required_large,
             "Large change threshold (files)": cfg.review.large_change_files,
-            "Reviewer minimum account age (days)": cfg.review.min_account_age_days,
+            "Open changes per author": cfg.limits.max_open_prs,
+            "Minimum account age to apply for a role (days)": cfg.roles.min_account_age_days,
             "Idea claim length (hours)": cfg.ideas.lease_hours,
         },
     });

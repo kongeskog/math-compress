@@ -1,3 +1,5 @@
+<!-- Title: <technique>(<scope>): <summary>, e.g. dead-code(Paper/Tree): remove unreferenced lemma foo -->
+
 ## What changed
 
 <!-- One focused change. Name the files and declarations. -->
@@ -10,5 +12,6 @@
 
 <!-- Paste the output of `hc eval` run from the repository root. -->
 
-<!-- If this came from the ideas queue, keep the next line and fill in the number. -->
-Closes #
+<!-- Keep exactly one of these two lines. -->
+Idea: #
+Idea: none

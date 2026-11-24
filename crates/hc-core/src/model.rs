@@ -87,14 +87,16 @@ impl Gate {
 
 /// Every gate, in display order, with its label and what it protects.
 pub const GATES: &[(&str, &str, &str)] = &[
+    ("format", "Standard title and description", "The title follows `technique(scope): summary` and the description names the idea it implements, so every change can be identified and grouped."),
+    ("quota", "Within the open-change limit", "One author may have only a limited number of changes in verification at once, so the build queue stays available to everyone."),
     ("frozen", "Frozen files untouched", "The statement of the theorems, the toolchain, the dependency pins and the harness configuration must be byte-identical to the main branch."),
     ("scope", "Changes stay in scope", "Only files inside the project directory may change."),
-    ("deny", "No banned constructs", "No new axioms, no unchecked native evaluation, no escape hatches, no private macro languages, no raised resource limits."),
+    ("deny", "No banned constructs", "No new axioms, no unchecked native evaluation, no escape hatches, no code that runs during the build, no private macro languages, no raised resource limits, and no protected declaration removed."),
     ("improves", "Score improves", "The primary metric must drop by at least the minimum step and no guard metric may rise beyond its tolerance."),
     ("compiles", "Project compiles", "The full project builds on the pinned toolchain with no unfinished proofs."),
     ("same_theorems", "Same theorems proved", "An independent checker with a second proof kernel confirms the original theorem statements are still proved from the standard axioms only."),
     ("fresh", "Verified on current main", "The verification ran on top of the latest main branch."),
-    ("review", "Independent review", "Approved by someone other than the author."),
+    ("review", "Independent review", "Approved by a vetted reviewer other than the author."),
 ];
 
 pub fn gate_label(key: &str) -> &'static str {
@@ -170,11 +172,17 @@ pub struct Attempt {
     pub merge_sha: Option<String>,
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default)]
+    pub technique: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IdeaStatus {
+    /// Filed by someone who is not yet a vetted ideator; waiting for triage.
+    Proposed,
     Open,
     Claimed,
     Done,
@@ -197,6 +205,10 @@ pub struct Idea {
     pub result_delta: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub url: String,
+    #[serde(default)]
+    pub technique: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,6 +274,106 @@ pub struct Ledger {
     /// `pr@head_sha` keys for which a verify run was dispatched.
     #[serde(default)]
     pub dispatched: BTreeMap<String, DateTime<Utc>>,
+    /// Issues that were already told their title or body is malformed.
+    #[serde(default)]
+    pub format_notified: std::collections::BTreeSet<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    Leader,
+    Reviewer,
+    Ideator,
+}
+
+impl Role {
+    pub fn parse(s: &str) -> Option<Role> {
+        match s.trim().to_lowercase().as_str() {
+            "leader" => Some(Role::Leader),
+            "reviewer" => Some(Role::Reviewer),
+            "ideator" => Some(Role::Ideator),
+            _ => None,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Role::Leader => "leader",
+            Role::Reviewer => "reviewer",
+            Role::Ideator => "ideator",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Member {
+    pub login: String,
+    pub role: Role,
+    pub since: DateTime<Utc>,
+    /// Leaders who endorsed or granted the role; empty for founding leaders.
+    pub by: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationStatus {
+    Open,
+    Granted,
+    Declined,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Application {
+    pub issue: u64,
+    pub login: String,
+    pub role: Role,
+    pub opened_at: DateTime<Utc>,
+    pub status: ApplicationStatus,
+    pub endorsements: Vec<String>,
+    pub needed: u32,
+    /// Experience at the time of applying.
+    pub merged: u64,
+    pub saved: u64,
+    pub url: String,
+}
+
+/// `roles.json` on the data branch: who holds which role, and open applications.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RolesState {
+    #[serde(default)]
+    pub bootstrap: bool,
+    #[serde(default)]
+    pub members: Vec<Member>,
+    #[serde(default)]
+    pub applications: Vec<Application>,
+}
+
+impl RolesState {
+    pub fn has(&self, login: &str, role: Role) -> bool {
+        self.members.iter().any(|m| m.role == role && m.login.eq_ignore_ascii_case(login))
+    }
+    pub fn is_leader(&self, login: &str) -> bool {
+        self.has(login, Role::Leader)
+    }
+    pub fn can_review(&self, login: &str) -> bool {
+        self.is_leader(login) || self.has(login, Role::Reviewer)
+    }
+    pub fn can_triage(&self, login: &str) -> bool {
+        self.is_leader(login) || self.has(login, Role::Ideator)
+    }
+    pub fn leaders(&self) -> usize {
+        self.members.iter().filter(|m| m.role == Role::Leader).count()
+    }
+    pub fn grant(&mut self, login: &str, role: Role, by: Vec<String>, at: DateTime<Utc>) {
+        if !self.has(login, role) {
+            self.members.push(Member { login: login.to_string(), role, since: at, by });
+        }
+    }
+    pub fn revoke(&mut self, login: &str, role: Role) -> bool {
+        let before = self.members.len();
+        self.members.retain(|m| !(m.role == role && m.login.eq_ignore_ascii_case(login)));
+        self.members.len() != before
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

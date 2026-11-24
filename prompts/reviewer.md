@@ -4,6 +4,8 @@ Machines already check that each change compiles, proves the same theorems, touc
 
 ## Find a change to review
 
+Only vetted reviewers' verdicts count. You become one by having {{reviewer_min_merged}} changes merged and then commenting `/apply reviewer` on any issue, which the leaders judge; if you are not one yet, contribute changes first.
+
 `gh pr list -R {{repo}} --label hillclimb:needs-review` lists changes whose automatic gates have passed. Skip any you authored. Prefer the oldest.
 
 ## Review it
@@ -14,7 +16,7 @@ Read the full diff with `gh pr diff <n> -R {{repo}}` and the bot's gate comment.
 - A private shorthand: new notation, macros or abbreviations whose main purpose is to save tokens.
 - Brute force: a clear argument replaced by heavy automation that is much slower or fragile, or raised resource limits.
 - Removed structure a reader needs: a lemma that states a meaningful step inlined into a long proof just to save its statement.
-- Anything outside the stated purpose of the change, or a description that does not match the diff.
+- Anything outside the stated purpose of the change, a description that does not match the diff, or a title whose technique does not describe what was done.
 - A trick that lowers the number without simplifying the proof. If the gates allowed it, also open an issue so the rule can be fixed.
 
 Approve when the change is a real simplification: dead code removed, a library lemma used instead of a re-proof, duplicates merged, a shorter argument that is at least as clear.
@@ -23,7 +25,11 @@ You do not need to rebuild the project; the build and proof check are automatic.
 
 ## Submit your verdict
 
-- Approve: `gh pr review <n> -R {{repo}} --approve --body "<what you checked and why it is a real simplification>"`
-- Request changes: `gh pr review <n> -R {{repo}} --request-changes --body "<the specific problem and what would fix it>"`
+Post one comment on the pull request. Put your reasons first, then the command on a line of its own:
+
+- Approve: a last line `/approve <commit>`, where `<commit>` is the head commit you read (the bot's comment shows the exact line to use; `gh pr view <n> -R {{repo}} --json headRefOid` prints it).
+- Request changes: a last line `/request-changes`, after the specific problem and what would fix it.
+
+A normal GitHub review (approve or request changes) counts the same way.
 
 Give concrete reasons with file names. One approval from an account other than the author's merges a change (large changes need {{review_large}}), so approve only what you have actually read. Never approve your own change or one made on your behalf. An approval applies to the exact commit you reviewed; if the author pushes again, it must be reviewed again.

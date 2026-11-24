@@ -1,7 +1,14 @@
-//! The gatekeeper: one reconcile pass over every open pull request and idea.
+//! The gatekeeper: one reconcile pass over every open pull request, idea,
+//! application and command.
 //!
 //! It is written against the [`Forge`] trait so the whole state machine can be
 //! tested without a network.
+//!
+//! Trust model. Anyone may open a pull request. Two things are earned:
+//! reviewing (an approval counts only from a vetted reviewer or a leader) and
+//! putting ideas straight into the queue (ideas from others wait for triage).
+//! Roles are granted by leaders, either directly or by endorsing an
+//! application that meets the experience threshold.
 
 use crate::config::Config;
 use crate::model::*;
@@ -13,9 +20,13 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const COMMENT_MARKER: &str = "<!-- hillclimb-gate -->";
 pub const STATUS_CONTEXT: &str = "hillclimb/gate";
 pub const LABEL_REJECTED: &str = "hillclimb:rejected";
+pub const LABEL_READY: &str = "hillclimb:needs-review";
+pub const LABEL_PROPOSED: &str = "idea:proposed";
+pub const LABEL_APPLICATION: &str = "application";
 /// Gates the verify workflow must report as passed.
 pub const REQUIRED_RESULT_GATES: &[&str] = &["frozen", "scope", "deny", "improves", "compiles", "same_theorems"];
-pub const LABEL_READY: &str = "hillclimb:needs-review";
+/// Words an idea's description must contain (its section headings).
+pub const IDEA_SECTIONS: &[&str] = &["target", "technique", "check", "estimate"];
 
 #[derive(Debug, Clone)]
 pub struct PullRequest {
@@ -42,12 +53,14 @@ pub struct ReviewInfo {
     pub submitted_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct IssueInfo {
     pub number: u64,
     pub title: String,
+    pub body: String,
     pub author: String,
     pub open: bool,
+    pub labels: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub url: String,
 }
@@ -76,6 +89,8 @@ pub trait Forge {
     fn active_verifies(&mut self) -> Result<BTreeSet<u64>>;
     fn dispatch_verify(&mut self, pr: u64) -> Result<()>;
     fn reviews(&mut self, pr: u64) -> Result<Vec<ReviewInfo>>;
+    /// Every comment on a pull request written by a person.
+    fn pr_comments(&mut self, pr: u64) -> Result<Vec<CommentInfo>>;
     fn account_created(&mut self, login: &str) -> Result<DateTime<Utc>>;
     fn set_status(&mut self, sha: &str, state: CommitState, description: &str) -> Result<()>;
     /// Create or update the single gate comment on a pull request.
@@ -83,10 +98,15 @@ pub trait Forge {
     fn set_label(&mut self, issue: u64, label: &str, present: bool) -> Result<()>;
     /// Squash-merge; returns the new commit on the main branch.
     fn merge(&mut self, pr: &PullRequest, message: &str) -> Result<String>;
-    fn idea_issues(&mut self) -> Result<Vec<IssueInfo>>;
+    /// Every issue (not pull request), open or closed.
+    fn issues(&mut self) -> Result<Vec<IssueInfo>>;
+    /// Comments by people on any issue or pull request since a time.
     fn comments_since(&mut self, since: Option<DateTime<Utc>>) -> Result<Vec<CommentInfo>>;
     fn assign(&mut self, issue: u64, login: &str, assigned: bool) -> Result<()>;
     fn comment(&mut self, issue: u64, body: &str) -> Result<()>;
+    /// Returns the new issue's number and URL.
+    fn create_issue(&mut self, title: &str, body: &str, label: &str) -> Result<(u64, String)>;
+    fn close_issue(&mut self, issue: u64) -> Result<()>;
 }
 
 /// What a reconcile pass produced; the caller persists it.
@@ -107,39 +127,79 @@ pub struct Gatekeeper<'a, F: Forge> {
     pub now: DateTime<Utc>,
 }
 
-fn idea_ref(body: &str) -> Option<u64> {
-    let re = Regex::new(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|idea:?)\s+#(\d+)").expect("static regex");
-    re.captures(body).and_then(|c| c[1].parse().ok())
+/// The idea a pull request implements: `Idea: #12` (or `Closes #12`).
+pub fn idea_ref(body: &str) -> Option<u64> {
+    let re = Regex::new(r"(?im)^\s*idea:\s*#(\d+)|\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)")
+        .expect("static regex");
+    let c = re.captures(body)?;
+    c.get(1).or(c.get(2))?.as_str().parse().ok()
+}
+
+fn names_an_idea(body: &str) -> bool {
+    Regex::new(r"(?im)^\s*idea:\s*(#\d+|none)\s*$").expect("static regex").is_match(body)
+        || idea_ref(body).is_some()
 }
 
 fn key(pr: u64, sha: &str) -> String {
     format!("{pr}@{sha}")
 }
 
+/// The first line of a comment that is a command, split into words.
+fn command(body: &str) -> Vec<String> {
+    body.lines()
+        .map(str::trim)
+        .find(|l| l.starts_with('/'))
+        .map(|l| l.split_whitespace().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+/// Merged changes and tokens saved by one author.
+pub fn experience(login: &str, attempts: &[Attempt]) -> (u64, u64) {
+    let mut merged = 0;
+    let mut saved = 0;
+    for a in attempts {
+        if a.status == AttemptStatus::Merged && a.author.eq_ignore_ascii_case(login) {
+            merged += 1;
+            saved += a.delta.map(|d| (-d).max(0) as u64).unwrap_or(0);
+        }
+    }
+    (merged, saved)
+}
+
 impl<'a, F: Forge> Gatekeeper<'a, F> {
-    /// `decided_keys` are the `pr@head_sha` keys already present in the log.
-    pub fn run(
-        &mut self,
-        ledger: &mut Ledger,
-        past: &[Attempt],
-    ) -> Result<Outcome> {
+    pub fn run(&mut self, ledger: &mut Ledger, roles: &mut RolesState, past: &[Attempt]) -> Result<Outcome> {
         let mut out = Outcome::default();
+        roles.bootstrap = self.cfg.roles.bootstrap;
+        for l in &self.cfg.roles.leaders {
+            roles.grant(l, Role::Leader, Vec::new(), self.now);
+        }
+
         let decided_keys: BTreeSet<String> = past.iter().map(|a| key(a.pr, &a.head_sha)).collect();
         let mut main = self.forge.main_head()?;
         let active = self.forge.active_verifies()?;
         let mut prs = self.forge.open_prs()?;
         prs.retain(|p| p.base_ref == self.cfg.project.branch && !p.draft);
         prs.sort_by_key(|p| p.number);
+        let mut issues = self.forge.issues()?;
+
+        // Commands first, so a role granted in this pass already counts below.
+        self.commands(ledger, roles, &prs, &mut issues, past, &active, &mut out.log)?;
 
         for pr in &prs {
             let result = self.forge.verify_result(pr.number, &pr.head_sha)?;
-            let reviews = self.forge.reviews(pr.number)?;
             let changed = result.as_ref().map(|r| r.changed_files).unwrap_or(0);
-            let review = self.review_gate(pr, &reviews, changed)?;
+            let review = self.review_gate(pr, roles, changed)?;
+            let (format, parsed) = self.format_gate(pr);
+            let format_ok = format.status == GateStatus::Pass;
             let mut attempt = self.attempt(pr, result.as_ref());
+            if let Some((technique, scope, _)) = parsed {
+                attempt.technique = Some(technique);
+                attempt.scope = Some(scope);
+            }
 
             if pr.mergeable == Some(false) {
-                attempt.gates = result.as_ref().map(|r| r.gates.clone()).unwrap_or_default();
+                attempt.gates = vec![format];
+                attempt.gates.extend(result.as_ref().map(|r| r.gates.clone()).unwrap_or_default());
                 attempt.gates.push(Gate::new(
                     "fresh",
                     GateStatus::Fail,
@@ -154,7 +214,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
 
             let Some(result) = result else {
                 // Not verified yet. Re-dispatch if the automatic trigger was lost.
-                attempt.gates = pending_gates(&review);
+                attempt.gates = pending_gates(&format, &review);
                 let k = key(pr.number, &pr.head_sha);
                 let waited = self.now - pr.created_at > Duration::minutes(20);
                 let recently = ledger
@@ -171,7 +231,8 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 continue;
             };
 
-            let mut gates = result.gates.clone();
+            let mut gates = vec![format];
+            gates.extend(result.gates.iter().cloned());
             // Anything short of an explicit pass on every required gate is a
             // failure: a skipped or missing check never lets a change through.
             for required in REQUIRED_RESULT_GATES {
@@ -184,14 +245,14 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                     None => gates.push(Gate::new(required, GateStatus::Fail, "The check did not run")),
                 }
             }
-            let any_failed = gates.iter().any(|g| g.status == GateStatus::Fail);
-            for g in gates.iter_mut().filter(|g| g.status == GateStatus::Skip) {
-                if !any_failed {
+            let result_failed = gates.iter().skip(1).any(|g| g.status == GateStatus::Fail);
+            for g in gates.iter_mut().skip(1).filter(|g| g.status == GateStatus::Skip) {
+                if !result_failed {
                     g.status = GateStatus::Fail;
                     g.detail = Some("The check did not run".into());
                 }
             }
-            let failed: Vec<&Gate> = gates.iter().filter(|g| g.status == GateStatus::Fail).collect();
+            let failed: Vec<&Gate> = gates.iter().skip(1).filter(|g| g.status == GateStatus::Fail).collect();
 
             if !failed.is_empty() {
                 let reason = failed
@@ -230,7 +291,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 gates.push(Gate::new(
                     "fresh",
                     GateStatus::Pending,
-                    if approved {
+                    if approved && format_ok {
                         "Main moved; re-verifying on the new main"
                     } else {
                         "Main moved; will be re-verified once approved"
@@ -239,7 +300,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 gates.push(review);
                 attempt.gates = gates;
                 attempt.status = AttemptStatus::Stale;
-                if approved && !active.contains(&pr.number) {
+                if approved && format_ok && !active.contains(&pr.number) {
                     let k = format!("{}@{}", key(pr.number, &pr.head_sha), main);
                     if !ledger.dispatched.contains_key(&k) {
                         self.forge.dispatch_verify(pr.number)?;
@@ -257,10 +318,15 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
             gates.push(review);
             attempt.gates = gates;
 
-            if !approved {
+            if !approved || !format_ok {
                 attempt.status = AttemptStatus::AwaitingReview;
-                self.forge.set_label(pr.number, LABEL_READY, true)?;
-                self.publish(pr, &attempt, CommitState::Pending, "All checks passed; waiting for independent review")?;
+                self.forge.set_label(pr.number, LABEL_READY, !approved && format_ok)?;
+                let text = if format_ok {
+                    "All checks passed; waiting for independent review"
+                } else {
+                    "Checks passed; the title or description needs fixing"
+                };
+                self.publish(pr, &attempt, CommitState::Pending, text)?;
                 out.open.push(attempt);
                 continue;
             }
@@ -303,7 +369,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
 
         let mut all: Vec<Attempt> = past.to_vec();
         all.extend(out.decided.iter().cloned());
-        out.ideas = self.ideas(ledger, &prs, &all, &mut out.log)?;
+        out.ideas = self.ideas(ledger, roles, &prs, &mut issues, &all, &mut out.log)?;
         Ok(out)
     }
 
@@ -330,6 +396,8 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
             run_url: result.and_then(|r| r.run_url.clone()),
             merge_sha: None,
             reason: None,
+            technique: None,
+            scope: None,
         }
     }
 
@@ -338,26 +406,82 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         self.forge.upsert_comment(pr.number, &render_comment(self.cfg, attempt))
     }
 
-    fn review_gate(&mut self, pr: &PullRequest, reviews: &[ReviewInfo], changed_files: usize) -> Result<Gate> {
+    /// Title and description follow the standard. Editing them needs no new push.
+    fn format_gate(&self, pr: &PullRequest) -> (Gate, Option<(String, String, String)>) {
+        let parsed = self.cfg.format.parse_title(&pr.title);
+        let mut problems = Vec::new();
+        if parsed.is_none() {
+            problems.push(format!("The title must be {}", self.cfg.format.title_help()));
+        }
+        if !names_an_idea(&pr.body) {
+            problems.push(
+                "The description must contain a line `Idea: #<number>` (the idea this implements) or `Idea: none`"
+                    .to_string(),
+            );
+        }
+        let gate = if problems.is_empty() {
+            Gate::new("format", GateStatus::Pass, "")
+        } else {
+            Gate::new(
+                "format",
+                GateStatus::Fail,
+                format!("{}. Edit the pull request; no new push is needed.", problems.join(". ")),
+            )
+        };
+        (gate, parsed)
+    }
+
+    /// Approvals count only from vetted reviewers and leaders. A verdict is
+    /// either a GitHub review or a comment `/approve <commit>` or
+    /// `/request-changes`; the latest verdict of each reviewer wins.
+    fn review_gate(&mut self, pr: &PullRequest, roles: &RolesState, changed_files: usize) -> Result<Gate> {
         let r = &self.cfg.review;
         let needed = if changed_files > r.large_change_files { r.required_large } else { r.required };
         if needed == 0 {
             return Ok(Gate::new("review", GateStatus::Pass, "No review required"));
         }
-        // Latest decisive review per reviewer.
-        let mut latest: BTreeMap<String, &ReviewInfo> = BTreeMap::new();
-        let mut sorted: Vec<&ReviewInfo> = reviews.iter().collect();
-        sorted.sort_by_key(|r| r.submitted_at);
-        for rv in sorted {
-            if rv.user.eq_ignore_ascii_case(&pr.author) {
-                continue;
+        let mut verdicts = self.forge.reviews(pr.number)?;
+        for c in self.forge.pr_comments(pr.number)? {
+            let cmd = command(&c.body);
+            match cmd.first().map(String::as_str) {
+                Some("/approve") => {
+                    let sha = cmd.get(1).map(String::as_str).unwrap_or("");
+                    let current = sha.len() >= 7 && pr.head_sha.starts_with(sha);
+                    verdicts.push(ReviewInfo {
+                        user: c.user,
+                        state: "APPROVED".into(),
+                        commit_id: if current { pr.head_sha.clone() } else { format!("other:{sha}") },
+                        submitted_at: c.created_at,
+                    });
+                }
+                Some("/request-changes") => verdicts.push(ReviewInfo {
+                    user: c.user,
+                    state: "CHANGES_REQUESTED".into(),
+                    commit_id: pr.head_sha.clone(),
+                    submitted_at: c.created_at,
+                }),
+                _ => {}
             }
-            match rv.state.as_str() {
-                "APPROVED" | "CHANGES_REQUESTED" => {
-                    latest.insert(rv.user.to_lowercase(), rv);
+        }
+        verdicts.sort_by_key(|v| v.submitted_at);
+
+        let mut latest: BTreeMap<String, &ReviewInfo> = BTreeMap::new();
+        let mut unvetted = BTreeSet::new();
+        for v in &verdicts {
+            let own = v.user.eq_ignore_ascii_case(&pr.author);
+            // While bootstrapping, the leaders run every agent from their own
+            // account, so a leader's verdict counts on that account's changes.
+            let eligible =
+                roles.can_review(&v.user) && (!own || (roles.bootstrap && roles.is_leader(&v.user)));
+            match v.state.as_str() {
+                "APPROVED" | "CHANGES_REQUESTED" if eligible => {
+                    latest.insert(v.user.to_lowercase(), v);
+                }
+                "APPROVED" if !own => {
+                    unvetted.insert(v.user.clone());
                 }
                 "DISMISSED" => {
-                    latest.remove(&rv.user.to_lowercase());
+                    latest.remove(&v.user.to_lowercase());
                 }
                 _ => {}
             }
@@ -365,22 +489,14 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         let mut approvals = Vec::new();
         let mut blocking = Vec::new();
         let mut outdated = 0;
-        let mut too_new = Vec::new();
-        for rv in latest.values() {
-            if rv.state == "CHANGES_REQUESTED" {
-                blocking.push(rv.user.clone());
-                continue;
-            }
-            if rv.commit_id != pr.head_sha {
+        for v in latest.values() {
+            if v.state == "CHANGES_REQUESTED" {
+                blocking.push(v.user.clone());
+            } else if v.commit_id != pr.head_sha {
                 outdated += 1;
-                continue;
+            } else {
+                approvals.push(v.user.clone());
             }
-            let created = self.forge.account_created(&rv.user)?;
-            if self.now - created < Duration::days(r.min_account_age_days) {
-                too_new.push(rv.user.clone());
-                continue;
-            }
-            approvals.push(rv.user.clone());
         }
         if !blocking.is_empty() {
             return Ok(Gate::new(
@@ -390,72 +506,275 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
             ));
         }
         if approvals.len() as u32 >= needed {
-            return Ok(Gate::new("review", GateStatus::Pass, format!("Approved by {}", approvals.join(", "))));
+            let own = approvals.iter().any(|a| a.eq_ignore_ascii_case(&pr.author));
+            return Ok(Gate::new(
+                "review",
+                GateStatus::Pass,
+                format!(
+                    "Approved by {}{}",
+                    approvals.join(", "),
+                    if own { " (bootstrap phase: reviewed by a separate agent of the same account)" } else { "" }
+                ),
+            ));
         }
-        let mut detail = format!("{} of {} approvals", approvals.len(), needed);
+        let mut detail = format!("{} of {} approvals from vetted reviewers", approvals.len(), needed);
         if outdated > 0 {
             detail.push_str(&format!("; {outdated} approval(s) are for an older commit"));
         }
-        if !too_new.is_empty() {
+        if !unvetted.is_empty() {
             detail.push_str(&format!(
-                "; accounts younger than {} days do not count ({})",
-                r.min_account_age_days,
-                too_new.join(", ")
+                "; approvals from {} do not count because they are not vetted reviewers yet",
+                unvetted.into_iter().collect::<Vec<_>>().join(", ")
             ));
         }
         Ok(Gate::new("review", GateStatus::Pending, detail))
     }
 
-    fn ideas(
+    /// Slash commands in new comments: claims, triage, applications, roles, retries.
+    #[allow(clippy::too_many_arguments)]
+    fn commands(
         &mut self,
         ledger: &mut Ledger,
+        roles: &mut RolesState,
         prs: &[PullRequest],
+        issues: &mut [IssueInfo],
         attempts: &[Attempt],
+        active: &BTreeSet<u64>,
         log: &mut Vec<String>,
-    ) -> Result<Vec<Idea>> {
-        let issues = self.forge.idea_issues()?;
-        let open: BTreeSet<u64> = issues.iter().filter(|i| i.open).map(|i| i.number).collect();
+    ) -> Result<()> {
         let lease = Duration::hours(self.cfg.ideas.lease_hours);
-
-        // Commands.
+        let idea_label = self.cfg.ideas.label.clone();
         let comments = self.forge.comments_since(ledger.comments_seen_until)?;
         for c in &comments {
-            if ledger.comments_seen_until.is_some_and(|t| c.created_at <= t) || !open.contains(&c.issue) {
+            if ledger.comments_seen_until.is_some_and(|t| c.created_at <= t) {
                 continue;
             }
-            let cmd = c.body.lines().map(str::trim).find(|l| l.starts_with('/')).unwrap_or("");
-            let holder = ledger.claims.get(&c.issue).map(|cl| cl.login.clone());
-            match cmd.split_whitespace().next().unwrap_or("") {
-                "/claim" => match holder {
+            let cmd = command(&c.body);
+            let Some(name) = cmd.first().map(String::as_str) else { continue };
+            let arg = |i: usize| cmd.get(i).map(|s| s.trim_start_matches('@').to_string()).unwrap_or_default();
+            let n = c.issue;
+            let issue = issues.iter().position(|i| i.number == n);
+            let has = |label: &str| {
+                issue.is_some_and(|i| issues[i].open && issues[i].labels.iter().any(|l| l == label))
+            };
+            let (queued, proposed) = (has(&idea_label), has(LABEL_PROPOSED));
+            let application = roles
+                .applications
+                .iter()
+                .position(|a| a.issue == n && a.status == ApplicationStatus::Open);
+            let leader = roles.is_leader(&c.user);
+
+            match name {
+                "/claim" if queued => match ledger.claims.get(&n).map(|cl| cl.login.clone()) {
                     None => {
-                        ledger.claims.insert(c.issue, Claim { login: c.user.clone(), at: c.created_at });
-                        let _ = self.forge.assign(c.issue, &c.user, true);
+                        ledger.claims.insert(n, Claim { login: c.user.clone(), at: c.created_at });
+                        let _ = self.forge.assign(n, &c.user, true);
                         self.forge.comment(
-                            c.issue,
+                            n,
                             &format!(
-                                "Claimed by @{} until {}. Open a pull request whose description says `Closes #{}` before then, or the claim is released. Comment `/unclaim` to release it early.",
+                                "Claimed by @{} until {}. Open a pull request whose description has the line `Idea: #{n}` before then, or the claim is released. Comment `/unclaim` to release it early.",
                                 c.user,
                                 (c.created_at + lease).format("%Y-%m-%d %H:%M UTC"),
-                                c.issue
                             ),
                         )?;
-                        log.push(format!("idea #{}: claimed by {}", c.issue, c.user));
+                        log.push(format!("idea #{n}: claimed by {}", c.user));
                     }
                     Some(h) if h.eq_ignore_ascii_case(&c.user) => {}
                     Some(h) => {
                         self.forge.comment(
-                            c.issue,
+                            n,
                             &format!("@{} this idea is already claimed by {h}. Pick another open idea.", c.user),
                         )?;
                     }
                 },
+                "/claim" if proposed => {
+                    self.forge.comment(
+                        n,
+                        &format!("@{} this idea has not been accepted into the queue yet.", c.user),
+                    )?;
+                }
                 "/unclaim" | "/release" => {
-                    if holder.is_some_and(|h| h.eq_ignore_ascii_case(&c.user)) {
-                        ledger.claims.remove(&c.issue);
-                        let _ = self.forge.assign(c.issue, &c.user, false);
-                        self.forge.comment(c.issue, "Claim released. This idea is open again.")?;
-                        log.push(format!("idea #{}: released", c.issue));
+                    if ledger.claims.get(&n).is_some_and(|cl| cl.login.eq_ignore_ascii_case(&c.user)) {
+                        ledger.claims.remove(&n);
+                        let _ = self.forge.assign(n, &c.user, false);
+                        self.forge.comment(n, "Claim released. This idea is open again.")?;
+                        log.push(format!("idea #{n}: released"));
                     }
+                }
+                "/accept" if proposed => {
+                    let i = issue.expect("a proposed idea is an issue");
+                    let own = issues[i].author.eq_ignore_ascii_case(&c.user);
+                    if roles.can_triage(&c.user) && (!own || leader) {
+                        self.forge.set_label(n, LABEL_PROPOSED, false)?;
+                        self.forge.set_label(n, &idea_label, true)?;
+                        issues[i].labels.retain(|l| l != LABEL_PROPOSED);
+                        issues[i].labels.push(idea_label.clone());
+                        self.forge.comment(
+                            n,
+                            &format!("Accepted into the ideas queue by {}. Comment `/claim` to take it.", c.user),
+                        )?;
+                        log.push(format!("idea #{n}: accepted by {}", c.user));
+                    }
+                }
+                "/decline" => {
+                    if let (Some(a), true) = (application, leader) {
+                        roles.applications[a].status = ApplicationStatus::Declined;
+                        self.forge.comment(n, &format!("Declined by {}.", c.user))?;
+                        self.forge.close_issue(n)?;
+                        log.push(format!("application #{n}: declined"));
+                    } else if proposed && roles.can_triage(&c.user) {
+                        self.forge.comment(
+                            n,
+                            &format!("Declined by {}; see the comment above for the reason.", c.user),
+                        )?;
+                        self.forge.close_issue(n)?;
+                        if let Some(i) = issue {
+                            issues[i].open = false;
+                        }
+                        log.push(format!("idea #{n}: declined"));
+                    }
+                }
+                "/apply" => {
+                    let Some(role) = Role::parse(&arg(1)) else {
+                        self.forge.comment(
+                            n,
+                            &format!(
+                                "@{} say which role: `/apply reviewer`, `/apply ideator` or `/apply leader`.",
+                                c.user
+                            ),
+                        )?;
+                        continue;
+                    };
+                    if roles.has(&c.user, role)
+                        || roles.applications.iter().any(|a| {
+                            a.status == ApplicationStatus::Open
+                                && a.role == role
+                                && a.login.eq_ignore_ascii_case(&c.user)
+                        })
+                    {
+                        continue;
+                    }
+                    let (merged, saved) = experience(&c.user, attempts);
+                    let rc = &self.cfg.roles;
+                    let min = match role {
+                        Role::Reviewer => rc.reviewer_min_merged,
+                        Role::Ideator => rc.ideator_min_merged,
+                        Role::Leader => rc.leader_min_merged,
+                    };
+                    let age = self.now - self.forge.account_created(&c.user)?;
+                    if merged < min || age < Duration::days(rc.min_account_age_days) {
+                        self.forge.comment(
+                            n,
+                            &format!(
+                                "@{} not yet: applying for {} needs {min} merged change(s) (you have {merged}) and an account at least {} days old. A leader can still grant the role directly.",
+                                c.user,
+                                role.name(),
+                                rc.min_account_age_days
+                            ),
+                        )?;
+                        continue;
+                    }
+                    let leaders = roles.leaders().max(1) as u32;
+                    let needed = match role {
+                        Role::Leader => rc.leader_endorsements,
+                        _ => rc.endorsements,
+                    }
+                    .clamp(1, leaders);
+                    let body = format!(
+                        "@{} applies for the **{}** role.\n\n| | |\n|---|--:|\n| Merged changes | {merged} |\n| Tokens saved | {saved} |\n\nLeaders: look at this person's merged changes and reviews, then comment `/endorse` or `/decline`. {needed} endorsement(s) grant the role.",
+                        c.user,
+                        role.name()
+                    );
+                    let (number, url) = self.forge.create_issue(
+                        &format!("Application: {} @{}", role.name(), c.user),
+                        &body,
+                        LABEL_APPLICATION,
+                    )?;
+                    roles.applications.push(Application {
+                        issue: number,
+                        login: c.user.clone(),
+                        role,
+                        opened_at: self.now,
+                        status: ApplicationStatus::Open,
+                        endorsements: Vec::new(),
+                        needed,
+                        merged,
+                        saved,
+                        url,
+                    });
+                    log.push(format!("{} applied for {}", c.user, role.name()));
+                }
+                "/endorse" => {
+                    let (Some(a), true) = (application, leader) else { continue };
+                    let app = &mut roles.applications[a];
+                    if app.login.eq_ignore_ascii_case(&c.user)
+                        || app.endorsements.iter().any(|e| e.eq_ignore_ascii_case(&c.user))
+                    {
+                        continue;
+                    }
+                    app.endorsements.push(c.user.clone());
+                    if app.endorsements.len() as u32 >= app.needed {
+                        app.status = ApplicationStatus::Granted;
+                        let (login, role, by) = (app.login.clone(), app.role, app.endorsements.clone());
+                        roles.grant(&login, role, by, self.now);
+                        self.forge.comment(n, &format!("@{login} is now a {}.", role.name()))?;
+                        self.forge.close_issue(n)?;
+                        log.push(format!("{login} became {}", role.name()));
+                    }
+                }
+                "/grant" | "/revoke" if leader => {
+                    let (login, Some(role)) = (arg(1), Role::parse(&arg(2))) else {
+                        self.forge.comment(
+                            n,
+                            "Usage: `/grant @login reviewer|ideator` or `/revoke @login reviewer|ideator|leader`.",
+                        )?;
+                        continue;
+                    };
+                    if login.is_empty() {
+                        continue;
+                    }
+                    if name == "/grant" {
+                        if role == Role::Leader {
+                            self.forge.comment(
+                                n,
+                                "Leaders are added through `/apply leader` and endorsements, not granted directly.",
+                            )?;
+                        } else if !roles.has(&login, role) {
+                            roles.grant(&login, role, vec![c.user.clone()], self.now);
+                            self.forge.comment(
+                                n,
+                                &format!("@{login} is now a {}, granted by {}.", role.name(), c.user),
+                            )?;
+                            log.push(format!("{login} granted {}", role.name()));
+                        }
+                    } else {
+                        let founding = self.cfg.roles.leaders.iter().any(|l| l.eq_ignore_ascii_case(&login));
+                        if role == Role::Leader && founding {
+                            self.forge.comment(
+                                n,
+                                "Founding leaders are set in the configuration and cannot be revoked by command.",
+                            )?;
+                        } else if roles.revoke(&login, role) {
+                            self.forge.comment(
+                                n,
+                                &format!("{login} is no longer a {}, revoked by {}.", role.name(), c.user),
+                            )?;
+                            log.push(format!("{login} revoked {}", role.name()));
+                        }
+                    }
+                }
+                "/retry" => {
+                    let Some(pr) = prs.iter().find(|p| p.number == n) else { continue };
+                    if !(leader || pr.author.eq_ignore_ascii_case(&c.user)) || active.contains(&n) {
+                        continue;
+                    }
+                    let k = format!("{}@retry", key(n, &pr.head_sha));
+                    if ledger.dispatched.get(&k).is_some_and(|t| self.now - *t < Duration::minutes(30)) {
+                        continue;
+                    }
+                    self.forge.dispatch_verify(n)?;
+                    ledger.dispatched.insert(k, self.now);
+                    log.push(format!("#{n}: retry requested by {}", c.user));
                 }
                 _ => {}
             }
@@ -463,13 +782,76 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         if let Some(last) = comments.iter().map(|c| c.created_at).max() {
             ledger.comments_seen_until = Some(ledger.comments_seen_until.map_or(last, |t| t.max(last)));
         }
+        Ok(())
+    }
+
+    /// Triage newly filed ideas, expire claims, and list the queue.
+    fn ideas(
+        &mut self,
+        ledger: &mut Ledger,
+        roles: &RolesState,
+        prs: &[PullRequest],
+        issues: &mut [IssueInfo],
+        attempts: &[Attempt],
+        log: &mut Vec<String>,
+    ) -> Result<Vec<Idea>> {
+        let lease = Duration::hours(self.cfg.ideas.lease_hours);
+        let idea_label = self.cfg.ideas.label.clone();
+        let is = |i: &IssueInfo, l: &str| i.labels.iter().any(|x| x == l);
+
+        // New issues titled "Idea: ...": check the format, then queue or hold for triage.
+        for i in issues.iter_mut() {
+            if !i.open
+                || is(i, &idea_label)
+                || is(i, LABEL_PROPOSED)
+                || !i.title.trim_start().to_lowercase().starts_with("idea:")
+            {
+                continue;
+            }
+            let body = i.body.to_lowercase();
+            let missing: Vec<&str> = IDEA_SECTIONS.iter().copied().filter(|s| !body.contains(s)).collect();
+            if self.cfg.format.parse_idea_title(&i.title).is_none() || !missing.is_empty() {
+                if ledger.format_notified.insert(i.number) {
+                    let mut msg = format!(
+                        "This is not in the ideas queue yet. The title must be `Idea: ` followed by {}.",
+                        self.cfg.format.title_help()
+                    );
+                    if !missing.is_empty() {
+                        msg.push_str(&format!(
+                            " The description needs these sections: Targets, Technique, How to check, Estimated saving (missing: {}).",
+                            missing.join(", ")
+                        ));
+                    }
+                    msg.push_str(" Edit the issue and it will be picked up.");
+                    self.forge.comment(i.number, &msg)?;
+                }
+                continue;
+            }
+            ledger.format_notified.remove(&i.number);
+            if roles.can_triage(&i.author) {
+                self.forge.set_label(i.number, &idea_label, true)?;
+                i.labels.push(idea_label.clone());
+                log.push(format!("idea #{}: queued", i.number));
+            } else {
+                self.forge.set_label(i.number, LABEL_PROPOSED, true)?;
+                i.labels.push(LABEL_PROPOSED.to_string());
+                self.forge.comment(
+                    i.number,
+                    "Thanks. This idea is proposed; a vetted ideator or a leader will check it and comment `/accept` to put it in the queue, or `/decline` with a reason.",
+                )?;
+                log.push(format!("idea #{}: proposed", i.number));
+            }
+        }
+
+        let queued: BTreeSet<u64> =
+            issues.iter().filter(|i| i.open && is(i, &idea_label)).map(|i| i.number).collect();
 
         // Expiry: a claim lapses unless its holder has an open pull request for it.
         let expired: Vec<(u64, String)> = ledger
             .claims
             .iter()
             .filter(|(n, cl)| {
-                !open.contains(n)
+                !queued.contains(n)
                     || (self.now - cl.at > lease
                         && !prs.iter().any(|p| {
                             idea_ref(&p.body) == Some(**n) && p.author.eq_ignore_ascii_case(&cl.login)
@@ -479,7 +861,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
             .collect();
         for (n, login) in expired {
             ledger.claims.remove(&n);
-            if open.contains(&n) {
+            if queued.contains(&n) {
                 let _ = self.forge.assign(n, &login, false);
                 self.forge.comment(n, "The claim expired without a pull request. This idea is open again.")?;
                 log.push(format!("idea #{n}: claim expired"));
@@ -487,7 +869,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         }
 
         let mut ideas = Vec::new();
-        for i in issues {
+        for i in issues.iter().filter(|i| is(i, &idea_label) || is(i, LABEL_PROPOSED)) {
             let merged = attempts
                 .iter()
                 .rev()
@@ -498,22 +880,27 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 IdeaStatus::Done
             } else if !i.open {
                 IdeaStatus::Closed
+            } else if is(i, LABEL_PROPOSED) && !is(i, &idea_label) {
+                IdeaStatus::Proposed
             } else if claim.is_some() || open_pr.is_some() {
                 IdeaStatus::Claimed
             } else {
                 IdeaStatus::Open
             };
+            let parsed = self.cfg.format.parse_idea_title(&i.title);
             ideas.push(Idea {
                 number: i.number,
-                title: i.title,
+                title: i.title.clone(),
                 status,
-                author: i.author,
+                author: i.author.clone(),
                 claimed_by: claim.map(|c| c.login.clone()).or(open_pr.map(|p| p.author.clone())),
                 lease_expires: claim.map(|c| c.at + lease),
                 pr: merged.map(|a| a.pr).or(open_pr.map(|p| p.number)),
                 result_delta: merged.and_then(|a| a.delta),
                 created_at: i.created_at,
-                url: i.url,
+                url: i.url.clone(),
+                technique: parsed.as_ref().map(|p| p.0.clone()),
+                scope: parsed.as_ref().map(|p| p.1.clone()),
             });
         }
         ideas.sort_by_key(|i| std::cmp::Reverse(i.number));
@@ -521,12 +908,14 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
     }
 }
 
-fn pending_gates(review: &Gate) -> Vec<Gate> {
-    let mut gates: Vec<Gate> = GATES
-        .iter()
-        .filter(|g| g.0 != "review")
-        .map(|g| Gate::new(g.0, GateStatus::Pending, ""))
-        .collect();
+fn pending_gates(format: &Gate, review: &Gate) -> Vec<Gate> {
+    let mut gates = vec![format.clone()];
+    gates.extend(
+        GATES
+            .iter()
+            .filter(|g| !matches!(g.0, "review" | "format" | "quota"))
+            .map(|g| Gate::new(g.0, GateStatus::Pending, "")),
+    );
     gates.push(review.clone());
     gates
 }
@@ -539,9 +928,16 @@ pub fn render_comment(cfg: &Config, a: &Attempt) -> String {
         GateStatus::Pending => "⏳",
         GateStatus::Skip => "➖",
     };
+    let format_failed = a.gates.iter().any(|g| g.key == "format" && g.status == GateStatus::Fail);
     let headline = match a.status {
         AttemptStatus::Verifying => "Verification is running.".to_string(),
-        AttemptStatus::AwaitingReview => "All automatic gates passed. Waiting for an independent review.".to_string(),
+        AttemptStatus::AwaitingReview if format_failed => {
+            "The checks passed, but the title or description does not follow the standard. Edit the pull request; no new push is needed.".to_string()
+        }
+        AttemptStatus::AwaitingReview => format!(
+            "All automatic gates passed. Waiting for a vetted reviewer, who approves with a review or the comment `/approve {}`.",
+            &a.head_sha[..a.head_sha.len().min(10)]
+        ),
         AttemptStatus::Stale => "Main moved since this was verified.".to_string(),
         AttemptStatus::Conflict => "This branch conflicts with main.".to_string(),
         AttemptStatus::Merged => "Merged. Thank you.".to_string(),
@@ -584,6 +980,9 @@ mod tests {
             title = "T"
             repo = "o/r"
             dir = "proj"
+            [roles]
+            leaders = ["lead"]
+            reviewer_min_merged = 1
             "#,
         )
         .unwrap()
@@ -599,6 +998,7 @@ mod tests {
         prs: Vec<PullRequest>,
         results: BTreeMap<String, VerifyResult>,
         reviews: BTreeMap<u64, Vec<ReviewInfo>>,
+        pr_comments: BTreeMap<u64, Vec<CommentInfo>>,
         young: BTreeSet<String>,
         active: BTreeSet<u64>,
         issues: Vec<IssueInfo>,
@@ -607,8 +1007,9 @@ mod tests {
         dispatched: Vec<u64>,
         statuses: BTreeMap<String, CommitState>,
         posted: Vec<(u64, String)>,
-        assigned: Vec<(u64, String, bool)>,
         labels: Vec<(u64, String, bool)>,
+        closed: Vec<u64>,
+        created: Vec<String>,
     }
 
     impl Forge for Mock {
@@ -631,6 +1032,9 @@ mod tests {
         fn reviews(&mut self, pr: u64) -> Result<Vec<ReviewInfo>> {
             Ok(self.reviews.get(&pr).cloned().unwrap_or_default())
         }
+        fn pr_comments(&mut self, pr: u64) -> Result<Vec<CommentInfo>> {
+            Ok(self.pr_comments.get(&pr).cloned().unwrap_or_default())
+        }
         fn account_created(&mut self, login: &str) -> Result<DateTime<Utc>> {
             Ok(if self.young.contains(login) { t(-24) } else { t(-24 * 400) })
         }
@@ -650,18 +1054,25 @@ mod tests {
             self.main = format!("merge{}", pr.number);
             Ok(self.main.clone())
         }
-        fn idea_issues(&mut self) -> Result<Vec<IssueInfo>> {
+        fn issues(&mut self) -> Result<Vec<IssueInfo>> {
             Ok(self.issues.clone())
         }
         fn comments_since(&mut self, _: Option<DateTime<Utc>>) -> Result<Vec<CommentInfo>> {
             Ok(self.comments.clone())
         }
-        fn assign(&mut self, issue: u64, login: &str, on: bool) -> Result<()> {
-            self.assigned.push((issue, login.into(), on));
+        fn assign(&mut self, _: u64, _: &str, _: bool) -> Result<()> {
             Ok(())
         }
         fn comment(&mut self, issue: u64, body: &str) -> Result<()> {
             self.posted.push((issue, body.into()));
+            Ok(())
+        }
+        fn create_issue(&mut self, title: &str, _: &str, _: &str) -> Result<(u64, String)> {
+            self.created.push(title.into());
+            Ok((900 + self.created.len() as u64, "url".into()))
+        }
+        fn close_issue(&mut self, issue: u64) -> Result<()> {
+            self.closed.push(issue);
             Ok(())
         }
     }
@@ -669,10 +1080,10 @@ mod tests {
     fn pr(n: u64, author: &str) -> PullRequest {
         PullRequest {
             number: n,
-            title: format!("change {n}"),
+            title: format!("shorten(Paper/Tree): a shorter proof number {n}"),
             author: author.into(),
-            body: String::new(),
-            head_sha: format!("head{n}"),
+            body: "Shorter.\n\nIdea: none".into(),
+            head_sha: format!("head{n}abcdef"),
             base_ref: "main".into(),
             created_at: t(-1),
             url: format!("https://x/pull/{n}"),
@@ -682,11 +1093,15 @@ mod tests {
         }
     }
 
+    fn head(n: u64) -> String {
+        format!("head{n}abcdef")
+    }
+
     fn result(n: u64, base: &str, tokens: u64, pass: bool) -> VerifyResult {
         let gate = |k: &str, ok: bool| Gate::new(k, if ok { GateStatus::Pass } else { GateStatus::Fail }, "");
         VerifyResult {
             pr: n,
-            head_sha: format!("head{n}"),
+            head_sha: head(n),
             base_sha: base.into(),
             metrics: Metrics { tokens, ..Default::default() },
             base_metrics: Metrics { tokens: 1000, ..Default::default() },
@@ -708,68 +1123,154 @@ mod tests {
         ReviewInfo { user: user.into(), state: "APPROVED".into(), commit_id: commit.into(), submitted_at: t(0) }
     }
 
+    /// Roles as they stand in most tests: `lead` leads, `bob` reviews.
+    fn roles() -> RolesState {
+        let mut r = RolesState::default();
+        r.grant("bob", Role::Reviewer, vec!["lead".into()], t(-100));
+        r
+    }
+
+    fn run_with(m: &mut Mock, c: &Config, ledger: &mut Ledger, roles: &mut RolesState, past: &[Attempt]) -> Outcome {
+        Gatekeeper { cfg: c, forge: m, now: t(0) }.run(ledger, roles, past).unwrap()
+    }
+
     fn run(m: &mut Mock, ledger: &mut Ledger, past: &[Attempt]) -> Outcome {
-        let c = cfg();
-        Gatekeeper { cfg: &c, forge: m, now: t(0) }.run(ledger, past).unwrap()
+        run_with(m, &cfg(), ledger, &mut roles(), past)
     }
 
     fn base() -> Mock {
         Mock { main: "m0".into(), ..Default::default() }
     }
 
-    #[test]
-    fn green_and_reviewed_merges() {
+    /// One green pull request by alice, verified on current main.
+    fn green() -> Mock {
         let mut m = base();
         m.prs.push(pr(1, "alice"));
-        m.results.insert(key(1, "head1"), result(1, "m0", 900, true));
-        m.reviews.insert(1, vec![approve("bob", "head1")]);
+        m.results.insert(key(1, &head(1)), result(1, "m0", 900, true));
+        m
+    }
+
+    fn says(issue: u64, user: &str, body: &str, h: i64) -> CommentInfo {
+        CommentInfo { issue, user: user.into(), body: body.into(), created_at: t(h) }
+    }
+
+    fn merged_attempt(author: &str) -> Attempt {
+        let mut m = green();
+        m.prs[0].author = author.into();
+        m.reviews.insert(1, vec![approve("bob", &head(1))]);
+        run(&mut m, &mut Ledger::default(), &[]).decided.remove(0)
+    }
+
+    #[test]
+    fn green_and_reviewed_merges() {
+        let mut m = green();
+        m.reviews.insert(1, vec![approve("bob", &head(1))]);
         let out = run(&mut m, &mut Ledger::default(), &[]);
         assert_eq!(m.merged, [1]);
         assert_eq!(out.decided[0].status, AttemptStatus::Merged);
         assert_eq!(out.decided[0].delta, Some(-100));
+        assert_eq!(out.decided[0].technique.as_deref(), Some("shorten"));
+        assert_eq!(out.decided[0].scope.as_deref(), Some("Paper/Tree"));
         assert_eq!(out.current.unwrap().metrics.tokens, 900);
-        assert_eq!(m.statuses["head1"], CommitState::Success);
+        assert_eq!(m.statuses[&head(1)], CommitState::Success);
     }
 
     #[test]
     fn green_without_review_waits() {
-        let mut m = base();
-        m.prs.push(pr(1, "alice"));
-        m.results.insert(key(1, "head1"), result(1, "m0", 900, true));
+        let mut m = green();
         let out = run(&mut m, &mut Ledger::default(), &[]);
         assert!(m.merged.is_empty());
         assert_eq!(out.open[0].status, AttemptStatus::AwaitingReview);
     }
 
     #[test]
-    fn self_approval_stale_approval_and_new_accounts_do_not_count() {
-        let mut m = base();
-        m.prs.push(pr(1, "alice"));
-        m.results.insert(key(1, "head1"), result(1, "m0", 900, true));
-        m.young.insert("newbie".into());
-        m.reviews.insert(1, vec![approve("Alice", "head1"), approve("bob", "older"), approve("newbie", "head1")]);
+    fn only_vetted_reviewers_count() {
+        // Self-approval, an approval of an older commit, and an approval by
+        // someone who is not a reviewer: none of them merges.
+        let mut m = green();
+        m.reviews.insert(1, vec![approve("Alice", &head(1)), approve("bob", "older"), approve("mallory", &head(1))]);
+        let out = run(&mut m, &mut Ledger::default(), &[]);
+        assert!(m.merged.is_empty());
+        let review = out.open[0].gates.iter().find(|g| g.key == "review").unwrap();
+        assert!(review.detail.as_deref().unwrap().contains("mallory"));
+    }
+
+    #[test]
+    fn a_reviewer_cannot_approve_their_own_change() {
+        let mut m = green();
+        m.prs[0].author = "bob".into();
+        m.reviews.insert(1, vec![approve("bob", &head(1))]);
+        m.pr_comments.insert(1, vec![says(1, "bob", "/approve head1abcdef", 0)]);
         run(&mut m, &mut Ledger::default(), &[]);
         assert!(m.merged.is_empty());
     }
 
     #[test]
-    fn changes_requested_blocks_even_with_an_approval() {
-        let mut m = base();
-        m.prs.push(pr(1, "alice"));
-        m.results.insert(key(1, "head1"), result(1, "m0", 900, true));
-        let mut block = approve("carol", "head1");
-        block.state = "CHANGES_REQUESTED".into();
-        m.reviews.insert(1, vec![approve("bob", "head1"), block]);
+    fn comment_approval_needs_the_current_commit() {
+        let mut m = green();
+        m.pr_comments.insert(1, vec![says(1, "bob", "Looks right.\n/approve 0123456", 0)]);
         run(&mut m, &mut Ledger::default(), &[]);
         assert!(m.merged.is_empty());
+
+        m.pr_comments.insert(1, vec![says(1, "bob", "Looks right.\n/approve head1ab", 0)]);
+        run(&mut m, &mut Ledger::default(), &[]);
+        assert_eq!(m.merged, [1]);
+    }
+
+    #[test]
+    fn bootstrap_lets_a_leader_review_changes_from_the_leaders_account() {
+        let mut m = green();
+        m.prs[0].author = "lead".into();
+        m.pr_comments.insert(1, vec![says(1, "lead", "/approve head1abcdef", 0)]);
+        run(&mut m, &mut Ledger::default(), &[]);
+        assert!(m.merged.is_empty(), "not allowed outside bootstrap");
+
+        let mut c = cfg();
+        c.roles.bootstrap = true;
+        let out = run_with(&mut m, &c, &mut Ledger::default(), &mut roles(), &[]);
+        assert_eq!(m.merged, [1]);
+        let review = out.decided[0].gates.iter().find(|g| g.key == "review").unwrap();
+        assert!(review.detail.as_deref().unwrap().contains("bootstrap"));
+    }
+
+    #[test]
+    fn changes_requested_blocks_even_with_an_approval() {
+        let mut m = green();
+        m.reviews.insert(1, vec![approve("bob", &head(1))]);
+        m.pr_comments.insert(1, vec![says(1, "lead", "/request-changes names are unreadable", 1)]);
+        run(&mut m, &mut Ledger::default(), &[]);
+        assert!(m.merged.is_empty());
+        // Someone who is not a reviewer cannot block.
+        m.pr_comments.insert(1, vec![says(1, "mallory", "/request-changes", 1)]);
+        run(&mut m, &mut Ledger::default(), &[]);
+        assert_eq!(m.merged, [1]);
+    }
+
+    #[test]
+    fn nonstandard_title_or_missing_idea_line_blocks_the_merge() {
+        for (title, body) in [
+            ("Remove a lemma", "Idea: none"),
+            ("shorten(Paper/Tree): a shorter proof number 1", "no idea line"),
+        ] {
+            let mut m = green();
+            m.prs[0].title = title.into();
+            m.prs[0].body = body.into();
+            m.reviews.insert(1, vec![approve("bob", &head(1))]);
+            let out = run(&mut m, &mut Ledger::default(), &[]);
+            assert!(m.merged.is_empty());
+            assert_eq!(out.open[0].status, AttemptStatus::AwaitingReview);
+            assert_eq!(out.open[0].gates[0].key, "format");
+            assert_eq!(out.open[0].gates[0].status, GateStatus::Fail);
+            assert!(out.decided.is_empty(), "a format problem is fixed by editing, not logged as a rejection");
+        }
     }
 
     #[test]
     fn failed_gate_rejects_once() {
         let mut m = base();
         m.prs.push(pr(1, "alice"));
-        m.results.insert(key(1, "head1"), result(1, "m0", 1000, false));
-        m.reviews.insert(1, vec![approve("bob", "head1")]);
+        m.results.insert(key(1, &head(1)), result(1, "m0", 1000, false));
+        m.reviews.insert(1, vec![approve("bob", &head(1))]);
         let out = run(&mut m, &mut Ledger::default(), &[]);
         assert!(m.merged.is_empty());
         assert_eq!(out.decided.len(), 1);
@@ -781,13 +1282,30 @@ mod tests {
     }
 
     #[test]
+    fn skipped_or_missing_checks_never_merge() {
+        for mutate in [0, 1] {
+            let mut m = green();
+            let r = m.results.get_mut(&key(1, &head(1))).unwrap();
+            if mutate == 0 {
+                r.gates.iter_mut().find(|g| g.key == "same_theorems").unwrap().status = GateStatus::Skip;
+            } else {
+                r.gates.retain(|g| g.key != "compiles");
+            }
+            m.reviews.insert(1, vec![approve("bob", &head(1))]);
+            let out = run(&mut m, &mut Ledger::default(), &[]);
+            assert!(m.merged.is_empty());
+            assert_eq!(out.decided[0].status, AttemptStatus::Rejected);
+        }
+    }
+
+    #[test]
     fn second_ready_pr_goes_stale_after_first_merges_and_is_reverified() {
         let mut m = base();
         m.prs.push(pr(1, "alice"));
         m.prs.push(pr(2, "dave"));
         for n in [1, 2] {
-            m.results.insert(key(n, &format!("head{n}")), result(n, "m0", 900, true));
-            m.reviews.insert(n, vec![approve("bob", &format!("head{n}"))]);
+            m.results.insert(key(n, &head(n)), result(n, "m0", 900, true));
+            m.reviews.insert(n, vec![approve("bob", &head(n))]);
         }
         let mut ledger = Ledger::default();
         let out = run(&mut m, &mut ledger, &[]);
@@ -805,7 +1323,7 @@ mod tests {
     fn stale_unreviewed_pr_is_not_reverified() {
         let mut m = base();
         m.prs.push(pr(1, "alice"));
-        m.results.insert(key(1, "head1"), result(1, "old", 900, true));
+        m.results.insert(key(1, &head(1)), result(1, "old", 900, true));
         let out = run(&mut m, &mut Ledger::default(), &[]);
         assert_eq!(out.open[0].status, AttemptStatus::Stale);
         assert!(m.dispatched.is_empty());
@@ -829,39 +1347,7 @@ mod tests {
     }
 
     #[test]
-    fn conflict_is_reported() {
-        let mut m = base();
-        let mut p = pr(1, "alice");
-        p.mergeable = Some(false);
-        m.prs.push(p);
-        m.results.insert(key(1, "head1"), result(1, "m0", 900, true));
-        m.reviews.insert(1, vec![approve("bob", "head1")]);
-        let out = run(&mut m, &mut Ledger::default(), &[]);
-        assert!(m.merged.is_empty());
-        assert_eq!(out.open[0].status, AttemptStatus::Conflict);
-    }
-
-    #[test]
-    fn skipped_or_missing_checks_never_merge() {
-        for mutate in [0, 1] {
-            let mut m = base();
-            m.prs.push(pr(1, "alice"));
-            let mut r = result(1, "m0", 900, true);
-            if mutate == 0 {
-                r.gates.iter_mut().find(|g| g.key == "same_theorems").unwrap().status = GateStatus::Skip;
-            } else {
-                r.gates.retain(|g| g.key != "compiles");
-            }
-            m.results.insert(key(1, "head1"), r);
-            m.reviews.insert(1, vec![approve("bob", "head1")]);
-            let out = run(&mut m, &mut Ledger::default(), &[]);
-            assert!(m.merged.is_empty());
-            assert_eq!(out.decided[0].status, AttemptStatus::Rejected);
-        }
-    }
-
-    #[test]
-    fn conflict_without_a_result_is_reported_not_redispatched() {
+    fn conflict_is_reported_not_redispatched() {
         let mut m = base();
         let mut p = pr(1, "alice");
         p.mergeable = Some(false);
@@ -871,24 +1357,46 @@ mod tests {
         assert!(m.dispatched.is_empty());
     }
 
-    fn issue(n: u64, open: bool) -> IssueInfo {
-        IssueInfo { number: n, title: format!("idea {n}"), author: "eve".into(), open, created_at: t(-48), url: String::new() }
+    #[test]
+    fn retry_is_for_the_author_or_a_leader_and_rate_limited() {
+        let mut m = green();
+        m.prs[0].created_at = t(0);
+        m.comments = vec![says(1, "mallory", "/retry", 0)];
+        run(&mut m, &mut Ledger::default(), &[]);
+        assert!(m.dispatched.is_empty());
+        let mut ledger = Ledger::default();
+        m.comments = vec![says(1, "alice", "/retry", 0)];
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.dispatched, [1]);
+        m.comments = vec![says(1, "alice", "/retry", 1)];
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.dispatched, [1]);
     }
 
-    fn says(issue: u64, user: &str, body: &str, h: i64) -> CommentInfo {
-        CommentInfo { issue, user: user.into(), body: body.into(), created_at: t(h) }
+    fn idea(n: u64, author: &str, labels: &[&str]) -> IssueInfo {
+        IssueInfo {
+            number: n,
+            title: "Idea: merge(Nc/Tow): one statement for the Ever lemmas".into(),
+            body: "**Targets** x\n**Technique** y\n**How to check** z\n**Estimated saving** 100".into(),
+            author: author.into(),
+            open: true,
+            labels: labels.iter().map(|s| s.to_string()).collect(),
+            created_at: t(-48),
+            url: String::new(),
+        }
     }
 
     #[test]
     fn claim_then_second_claimant_is_turned_away() {
         let mut m = base();
-        m.issues.push(issue(7, true));
+        m.issues.push(idea(7, "eve", &["idea"]));
         m.comments = vec![says(7, "alice", "/claim", -1), says(7, "dave", "I'll take it\n/claim", 0)];
         let mut ledger = Ledger::default();
         let out = run(&mut m, &mut ledger, &[]);
         assert_eq!(ledger.claims[&7].login, "alice");
         assert_eq!(out.ideas[0].status, IdeaStatus::Claimed);
         assert_eq!(out.ideas[0].claimed_by.as_deref(), Some("alice"));
+        assert_eq!(out.ideas[0].technique.as_deref(), Some("merge"));
         assert_eq!(m.posted.len(), 2);
         // Already-seen comments are not processed again.
         run(&mut m, &mut ledger, &[]);
@@ -898,11 +1406,11 @@ mod tests {
     #[test]
     fn claim_expires_without_a_pull_request_but_not_with_one() {
         let mut m = base();
-        m.issues.push(issue(7, true));
+        m.issues.push(idea(7, "eve", &["idea"]));
         let mut ledger = Ledger::default();
         ledger.claims.insert(7, Claim { login: "alice".into(), at: t(-5) });
         let mut p = pr(1, "alice");
-        p.body = "Closes #7".into();
+        p.body = "Idea: #7".into();
         m.prs.push(p);
         m.active.insert(1);
         run(&mut m, &mut ledger, &[]);
@@ -916,27 +1424,121 @@ mod tests {
 
     #[test]
     fn merged_pull_request_marks_its_idea_done() {
-        let mut m = base();
-        m.issues.push(issue(7, true));
-        let mut p = pr(1, "alice");
-        p.body = "Shorter proof.\n\nCloses #7".into();
-        m.prs.push(p);
-        m.results.insert(key(1, "head1"), result(1, "m0", 900, true));
-        m.reviews.insert(1, vec![approve("bob", "head1")]);
+        let mut m = green();
+        m.issues.push(idea(7, "eve", &["idea"]));
+        m.prs[0].body = "Shorter proof.\n\nIdea: #7".into();
+        m.reviews.insert(1, vec![approve("bob", &head(1))]);
         let out = run(&mut m, &mut Ledger::default(), &[]);
         assert_eq!(out.ideas[0].status, IdeaStatus::Done);
         assert_eq!(out.ideas[0].result_delta, Some(-100));
     }
 
     #[test]
-    fn comment_lists_every_gate() {
+    fn ideas_from_newcomers_wait_for_triage() {
         let mut m = base();
-        m.prs.push(pr(1, "alice"));
-        m.results.insert(key(1, "head1"), result(1, "m0", 900, true));
+        m.issues.push(idea(7, "newcomer", &[]));
+        m.issues.push(idea(8, "lead", &[]));
+        let mut ledger = Ledger::default();
+        let out = run(&mut m, &mut ledger, &[]);
+        assert!(m.labels.contains(&(7, LABEL_PROPOSED.into(), true)));
+        assert!(m.labels.contains(&(8, "idea".into(), true)));
+        let status = |n| out.ideas.iter().find(|i| i.number == n).unwrap().status;
+        assert_eq!(status(7), IdeaStatus::Proposed);
+        assert_eq!(status(8), IdeaStatus::Open);
+
+        // A proposed idea cannot be claimed; a newcomer cannot accept it; a leader can.
+        m.issues[0].labels = vec![LABEL_PROPOSED.into()];
+        m.issues[1].labels = vec!["idea".into()];
+        m.comments = vec![says(7, "alice", "/claim", 1), says(7, "newcomer", "/accept", 2), says(7, "lead", "/accept", 3)];
+        let out = run(&mut m, &mut ledger, &[]);
+        assert!(!ledger.claims.contains_key(&7));
+        assert_eq!(out.ideas.iter().find(|i| i.number == 7).unwrap().status, IdeaStatus::Open);
+    }
+
+    #[test]
+    fn malformed_idea_is_told_once_and_stays_out_of_the_queue() {
+        let mut m = base();
+        let mut bad = idea(7, "lead", &[]);
+        bad.title = "Idea: make things shorter".into();
+        m.issues.push(bad);
+        let mut ledger = Ledger::default();
+        let out = run(&mut m, &mut ledger, &[]);
+        assert!(out.ideas.is_empty());
+        assert_eq!(m.posted.len(), 1);
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.posted.len(), 1);
+    }
+
+    #[test]
+    fn application_needs_experience_then_a_leaders_endorsement() {
+        // No merged change yet: turned away.
+        let mut m = base();
+        m.issues.push(idea(7, "eve", &["idea"]));
+        m.comments = vec![says(7, "alice", "/apply reviewer", 0)];
+        let mut r = roles();
+        run_with(&mut m, &cfg(), &mut Ledger::default(), &mut r, &[]);
+        assert!(r.applications.is_empty());
+        assert!(m.posted[0].1.contains("not yet"));
+
+        // With a merged change: an application issue is opened.
+        let past = vec![merged_attempt("alice")];
+        let mut m = base();
+        m.issues.push(idea(7, "eve", &["idea"]));
+        m.comments = vec![says(7, "alice", "/apply reviewer", 0)];
+        let mut ledger = Ledger::default();
+        run_with(&mut m, &cfg(), &mut ledger, &mut r, &past);
+        assert_eq!(m.created, ["Application: reviewer @alice"]);
+        let issue = r.applications[0].issue;
+        assert!(!r.can_review("alice"));
+
+        // The applicant and non-leaders cannot endorse; a leader can.
+        m.comments = vec![says(issue, "alice", "/endorse", 1), says(issue, "bob", "/endorse", 2)];
+        run_with(&mut m, &cfg(), &mut ledger, &mut r, &past);
+        assert!(!r.can_review("alice"));
+        m.comments = vec![says(issue, "lead", "/endorse", 3)];
+        run_with(&mut m, &cfg(), &mut ledger, &mut r, &past);
+        assert!(r.can_review("alice"));
+        assert_eq!(r.applications[0].status, ApplicationStatus::Granted);
+        assert_eq!(m.closed, [issue]);
+    }
+
+    #[test]
+    fn leaders_grant_and_revoke_and_others_cannot() {
+        let mut m = base();
+        let mut r = roles();
+        m.comments = vec![says(3, "mallory", "/grant @mallory reviewer", 0), says(3, "lead", "/grant @carol reviewer", 1)];
+        let mut ledger = Ledger::default();
+        run_with(&mut m, &cfg(), &mut ledger, &mut r, &[]);
+        assert!(!r.can_review("mallory"));
+        assert!(r.can_review("carol"));
+        m.comments = vec![
+            says(3, "lead", "/revoke @carol reviewer", 2),
+            says(3, "lead", "/grant @carol leader", 3),
+            says(3, "lead", "/revoke @lead leader", 4),
+        ];
+        run_with(&mut m, &cfg(), &mut ledger, &mut r, &[]);
+        assert!(!r.can_review("carol"));
+        assert!(!r.is_leader("carol"));
+        assert!(r.is_leader("lead"));
+    }
+
+    #[test]
+    fn a_role_granted_in_this_pass_counts_in_this_pass() {
+        let mut m = green();
+        m.reviews.insert(1, vec![approve("carol", &head(1))]);
+        m.comments = vec![says(1, "lead", "/grant @carol reviewer", 0)];
+        run(&mut m, &mut Ledger::default(), &[]);
+        assert_eq!(m.merged, [1]);
+    }
+
+    #[test]
+    fn comment_lists_every_gate() {
+        let mut m = green();
         let out = run(&mut m, &mut Ledger::default(), &[]);
         let body = render_comment(&cfg(), &out.open[0]);
         assert!(body.starts_with(COMMENT_MARKER));
-        for g in GATES {
+        assert!(body.contains("/approve head1abcde"));
+        for g in GATES.iter().filter(|g| g.0 != "quota") {
             assert!(body.contains(g.1), "missing {}", g.1);
         }
     }

@@ -46,7 +46,31 @@ guards = [
 required = 1
 large_change_files = 20
 required_large = 2
+
+# Who may do what. Anyone may contribute changes. Reviewing, and putting ideas
+# straight into the queue, are earned: leaders grant those roles directly or by
+# endorsing an application from someone with enough merged changes.
+[roles]
+leaders = ["kongeskog"]
+# The leaders currently run every agent from their own account, so a leader's
+# review counts on that account's changes. Set to false before opening up.
+bootstrap = true
+reviewer_min_merged = 2
+ideator_min_merged = 1
+leader_min_merged = 5
+endorsements = 1
+leader_endorsements = 2
 min_account_age_days = 30
+
+[limits]
+max_open_prs = 4
+
+# Statements of the paper. They may be re-proved but not removed, so the
+# formalization keeps mirroring the paper it formalizes.
+[[protect]]
+name = "paper statements"
+pattern = '''(?m)^\s*(?:@\[[^\]]*\]\s*)*(?:(?:private|protected|noncomputable)\s+)*(?:theorem|lemma|def|abbrev)\s+((?:_root_\.)?(?:[A-Za-z0-9_]+\.)*(?:thm|lem|prop|cor|def)_[A-Za-z0-9_']+)'''
+description = "Declarations named after numbered statements of the paper (`thm_*`, `lem_*`, `prop_*`, `cor_*`, `def_*`) may be re-proved but not removed."
 
 [ideas]
 label = "idea"
@@ -84,6 +108,12 @@ name = "compile-time code"
 pattern = '(#eval|#exit|\brun_cmd\b|\brun_elab\b|\brun_meta\b|\binitialize\b|\bbuiltin_initialize\b|\belab\b|\belab_rules\b|\bcommand_elab\b|\bterm_elab\b|\btactic\s*:\s*Tactic\b)'
 mode = "forbid"
 description = "Code that runs during compilation (`#eval`, `run_cmd`, `elab`, `initialize`)."
+
+[[deny]]
+name = "metaprogramming"
+pattern = '(\b(MetaM|TacticM|TermElabM|CommandElabM|CoreM|MacroM|simproc|dsimproc|simproc_decl|run_tac|by_elab|unsafeIO|unsafeBaseIO)\b|\bLean\.(Elab|Meta|Parser|PrettyPrinter)\b|\bIO\.(Process|FS|Ref|mkRef|getEnv)\b|\bopen\s+Lean\b)'
+mode = "forbid"
+description = "Metaprogramming (`MetaM`, `TacticM`, `simproc`, `run_tac`, `open Lean`, `IO`): proofs are written with existing tactics, not new ones."
 
 [[deny]]
 name = "macros and notation"

@@ -92,6 +92,7 @@ jobs:
           HEAD_SHA: ${{ steps.merge.outputs.head_sha }}
           BASE_SHA: ${{ steps.merge.outputs.base_sha }}
           CONFLICT: ${{ steps.merge.outputs.conflict }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ "$CONFLICT" = true ]; then
@@ -99,7 +100,12 @@ jobs:
             echo "ok=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # How many pull requests the author has open, for the open-change limit.
+          author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .user.login)"
+          open_prs="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+            --jq '.[].user.login' | grep -cxF "$author" || true)"
           hc eval --head head --base base --pr "$PR" --head-sha "$HEAD_SHA" --base-sha "$BASE_SHA" \
+            --author "$author" --author-open-prs "$open_prs" \
             --out static.json | tee -a "$GITHUB_STEP_SUMMARY"
           if jq -e '[.gates[] | select(.status != "pass")] | length == 0' static.json >/dev/null; then
             echo "ok=true" >> "$GITHUB_OUTPUT"

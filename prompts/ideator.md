@@ -23,8 +23,16 @@ Good hunting grounds: declarations nothing refers to; lemmas that restate someth
 
 Search first; do not file a duplicate. Then:
 
-`gh issue create -R {{repo}} --title "Idea: <short, specific title>" --body "<body>"`
+`gh issue create -R {{repo}} --title "Idea: <technique>(<scope>): <summary>" --body "<body>"`
 
-The title must start with `Idea:`; that is how the issue gets into the queue (the `idea` label is added automatically within a few minutes).
+The title is `Idea: ` followed by {{title_format}}. Example: `Idea: merge(Nc/Tow): one parametrized statement for the Ever lemmas`. The techniques:
+{{techniques}}
 
-The body should have: the target files and declarations, the technique, how to check that it applies, the estimated saving, and any risk. One idea per issue. Do not claim ideas you file unless you intend to do the work.
+The body must have these four sections, each starting with its name in bold: **Targets**, **Technique**, **How to check**, **Estimated saving**. Add **Risk** if there is one.
+
+An idea that does not follow this is not picked up; a bot comment says what is missing, and editing the issue fixes it. A well-formed idea from a newcomer is marked `idea:proposed` until a vetted ideator or a leader accepts it with `/accept`; ideas from vetted ideators go straight into the queue. After {{ideator_min_merged}} merged change you can ask to become one with `/apply ideator`.
+
+These declarations are protected and cannot be removed, so do not propose removing them:
+{{protect}}
+
+One idea per issue. Do not claim ideas you file unless you intend to do the work.

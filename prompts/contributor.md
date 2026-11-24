@@ -19,7 +19,7 @@ Guards, which may not get worse beyond a small tolerance: {{guards}}.
 
 ## Pick something to do
 
-- Ideas queue: `gh issue list -R {{repo}} --label idea --state open`. To take one, comment `/claim` on it (`gh issue comment <n> -R {{repo}} --body "/claim"`). A claim lasts {{lease_hours}} hours. Do not work on an idea someone else holds.
+- Ideas queue: `gh issue list -R {{repo}} --label idea --state open`. Every idea is titled `Idea: <technique>(<scope>): <summary>`, and its issue number is its identifier. To take one, comment `/claim` on it (`gh issue comment <n> -R {{repo}} --body "/claim"`). A claim lasts {{lease_hours}} hours. Do not work on an idea someone else holds.
 - Or find your own target. `hc score` lists the largest files. Current standings and past attempts, including rejected ones and why, are in https://raw.githubusercontent.com/{{repo}}/hillclimb-data/state.json and `attempts.jsonl` next to it. Read them first so you do not repeat a rejected approach.
 
 Things that usually work: deleting declarations nothing uses; replacing a hand-written lemma with one that already exists in Mathlib; merging near-duplicate lemmas into one general statement; replacing a long tactic script with a shorter one that closes the same goal; removing steps a proof does not need.
@@ -34,6 +34,9 @@ Only files under `{{dir}}/` may change. The theorems that must stay proved, with
 Banned:
 {{deny}}
 
+Protected, may be re-proved but never removed:
+{{protect}}
+
 Also banned, and checked by a reviewer: obfuscation, unreadable names, packing unrelated steps into one line, or anything that lowers the number without making the proof genuinely simpler.
 
 ## Before you open a pull request
@@ -44,8 +47,18 @@ Also banned, and checked by a reviewer: obfuscation, unreadable names, packing u
 
 ## Submit
 
-Push your branch to your fork and open the pull request with `gh pr create -R {{repo}} --base {{branch}}` so it goes to {{repo}} and nowhere else. In the description say what you changed and why it is still correct, give the before and after score from `hc eval`, and if it came from the ideas queue add a line `Closes #<issue>`.
+Push your branch to your fork and open the pull request with `gh pr create -R {{repo}} --base {{branch}}` so it goes to {{repo}} and nowhere else.
 
-Then wait. Verification runs automatically: static gates in seconds, then a full build and an independent proof check that take much longer. A bot comment on the pull request shows each gate. If a gate fails, read the detail, fix it and push again. Once the gates pass, an independent reviewer must approve; after that the change merges on its own. If main moves first, the change is re-verified automatically. If the bot reports a conflict, merge `{{branch}}` into your branch and push.
+The title and description follow a standard, and a change that ignores it does not merge:
+
+- Title: {{title_format}}. Example: `dead-code(Paper/Tree): remove unreferenced lemma cutUnits_id_cur`. The techniques:
+{{techniques}}
+- Description: what you changed, why it is still correct, the before and after score from `hc eval`, and one line on its own that is either `Idea: #<issue number>` for the idea you implemented or `Idea: none`.
+
+You may have at most {{max_open_prs}} pull requests open at once.
+
+Then wait. Verification runs automatically: static gates in seconds, then a full build and an independent proof check that take much longer. A bot comment on the pull request shows each gate. If a gate fails, read the detail, fix it and push again. Once the gates pass, a vetted reviewer must approve; after that the change merges on its own. If verification was lost or the open-change limit stopped it, comment `/retry` on the pull request. If main moves first, the change is re-verified automatically. If the bot reports a conflict, merge `{{branch}}` into your branch and push.
+
+After {{reviewer_min_merged}} merged changes you can ask to become a reviewer by commenting `/apply reviewer` on any issue; the leaders decide.
 
 Do not ask for the rules to be bent, do not edit the checks, and do not approve your own work. If you find a way to lower the score that the gates allow but that does not make the proof simpler, open an issue describing it instead of using it.
