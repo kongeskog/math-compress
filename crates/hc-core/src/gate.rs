@@ -1008,7 +1008,10 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 .collect();
             let merged = merged_all.last().copied();
             let saved: i64 = merged_all.iter().filter_map(|a| a.delta).sum();
-            let open_pr = prs.iter().find(|p| idea_ref(&p.body) == Some(i.number));
+            let open_pr = prs.iter().find(|p| {
+                idea_ref(&p.body) == Some(i.number)
+                    && !attempts.iter().any(|a| a.pr == p.number && a.status == AttemptStatus::Merged)
+            });
             let claim = ledger.claims.get(&i.number);
             // An idea is done when it is closed and something merged for it;
             // while it is open there may be more to do.
