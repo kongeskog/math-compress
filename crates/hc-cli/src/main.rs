@@ -64,6 +64,19 @@ enum Cmd {
         head_sha: String,
         #[arg(long, default_value = "")]
         base_sha: String,
+        /// Configuration to judge by. Defaults to the base checkout's own; the
+        /// verify workflow passes main's, so that nothing in a stack can relax a rule.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Git tree the change was applied to.
+        #[arg(long)]
+        base_tree: Option<String>,
+        /// Git tree after applying the change.
+        #[arg(long)]
+        merged_tree: Option<String>,
+        /// `pr@head_sha` of changes applied before this one (repeatable).
+        #[arg(long)]
+        stack: Vec<String>,
         /// Login of the pull request's author, for the open-change limit.
         #[arg(long, default_value = "")]
         author: String,
@@ -139,8 +152,8 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Eval { head, base, base_ref, pr, head_sha, base_sha, author, author_open_prs, out } => {
-            eval_cmd(&head, base, base_ref, pr, head_sha, base_sha, &author, author_open_prs, out)
+        Cmd::Eval { head, base, base_ref, config, pr, head_sha, base_sha, base_tree, merged_tree, stack, author, author_open_prs, out } => {
+            eval_cmd(&head, base, base_ref, config, pr, head_sha, base_sha, (base_tree, merged_tree, stack), &author, author_open_prs, out)
         }
         Cmd::Finalize { static_result, compiles, same_theorems, build_seconds, out } => {
             finalize(&static_result, compiles, same_theorems, build_seconds, &out)
@@ -203,9 +216,11 @@ fn eval_cmd(
     head: &Path,
     base: Option<PathBuf>,
     base_ref: Option<String>,
+    config: Option<PathBuf>,
     pr: u64,
     head_sha: String,
     base_sha: String,
+    trees: (Option<String>, Option<String>, Vec<String>),
     author: &str,
     author_open_prs: usize,
     out: Option<PathBuf>,
@@ -219,7 +234,7 @@ fn eval_cmd(
         }
     };
     // The configuration always comes from the base: a change cannot relax its own rules.
-    let cfg = Config::load(&base_dir.join("hillclimb.toml"))?;
+    let cfg = Config::load(&config.unwrap_or_else(|| base_dir.join("hillclimb.toml")))?;
     let b = eval::measure(&base_dir, &cfg)?;
     let mut h = eval::measure(head, &cfg)?;
     if temp {
@@ -277,6 +292,9 @@ fn eval_cmd(
             pr,
             head_sha,
             base_sha,
+            base_tree: trees.0,
+            merged_tree: trees.1,
+            stack: trees.2,
             metrics: h.metrics,
             base_metrics: b.metrics,
             gates,
@@ -402,7 +420,7 @@ fn gate(root: &Path, data: &Path, dry_run: bool) -> Result<()> {
     attempts.extend(out.decided.iter().cloned());
     if out.current.is_some() {
         // Rebuild main so later pull requests build incrementally against it.
-        if let Err(e) = hc_core::gate::Forge::dispatch_verify(&mut forge, 0) {
+        if let Err(e) = hc_core::gate::Forge::dispatch_verify(&mut forge, 0, &[]) {
             eprintln!("could not dispatch a build of main: {e:#}");
         }
     }

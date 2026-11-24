@@ -22,6 +22,10 @@ on:
         description: Pull request number, or 0 to build main and refresh the cache
         type: number
         required: true
+      stack:
+        description: Pull requests to apply before this one, in order (space separated)
+        type: string
+        default: ""
       dir:
         description: Project directory inside the arena repository
         type: string
@@ -57,6 +61,7 @@ jobs:
       ok: ${{ steps.eval.outputs.ok }}
       head_sha: ${{ steps.merge.outputs.head_sha }}
       base_sha: ${{ steps.merge.outputs.base_sha }}
+      stack_shas: ${{ steps.merge.outputs.stack_shas }}
     steps:
       - name: Check out main
         uses: actions/checkout@v4
@@ -65,23 +70,48 @@ jobs:
           path: base
           persist-credentials: false
 
-      - name: Merge the pull request onto main (as data)
+      # `stacked` is main with the changes queued ahead of this one applied;
+      # `head` is that with this change applied. The result is valid for
+      # exactly the tree of `stacked`, which is recorded.
+      - name: Apply the stack and the pull request (as data)
         id: merge
         env:
           PR: ${{ inputs.pr }}
+          STACK: ${{ inputs.stack }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           set -euo pipefail
+          merge() {  # <worktree> <commit>
+            git -C "$1" -c user.name=hillclimb -c user.email=hillclimb@users.noreply.github.com \
+              -c core.hooksPath=/dev/null -c filter.lfs.smudge= -c filter.lfs.process= -c filter.lfs.required=false \
+              merge --quiet --no-ff --no-edit "$2"
+          }
           base_sha="$(git -C base rev-parse HEAD)"
+          git -C base worktree add --quiet --detach ../stacked "$base_sha"
+          stack_shas=""
+          stack_args=""
+          for n in $STACK; do
+            [[ "$n" =~ ^[0-9]+$ ]] || { echo "::error::bad stack entry"; exit 1; }
+            git -C base fetch --quiet --no-tags "$REPO_URL" "pull/$n/head"
+            sha="$(git -C base rev-parse FETCH_HEAD)"
+            merge stacked "$sha" || { echo "::error::#$n does not apply on top of the changes ahead of it"; exit 1; }
+            stack_shas="$stack_shas $sha"
+            stack_args="$stack_args --stack $n@$sha"
+          done
           git -C base fetch --quiet --no-tags "$REPO_URL" "pull/$PR/head"
           head_sha="$(git -C base rev-parse FETCH_HEAD)"
-          git -C base worktree add --quiet --detach ../head "$base_sha"
+          git -C base worktree add --quiet --detach ../head "$(git -C stacked rev-parse HEAD)"
           conflict=false
-          git -C head -c user.name=hillclimb -c user.email=hillclimb@users.noreply.github.com \
-            -c core.hooksPath=/dev/null -c filter.lfs.smudge= -c filter.lfs.process= -c filter.lfs.required=false merge --quiet --no-ff --no-edit "$head_sha" || conflict=true
-          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
-          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
-          echo "conflict=$conflict" >> "$GITHUB_OUTPUT"
+          merge head "$head_sha" || conflict=true
+          {
+            echo "base_sha=$base_sha"
+            echo "head_sha=$head_sha"
+            echo "stack_shas=${stack_shas# }"
+            echo "stack_args=${stack_args# }"
+            echo "base_tree=$(git -C stacked rev-parse 'HEAD^{tree}')"
+            echo "merged_tree=$(git -C head rev-parse 'HEAD^{tree}')"
+            echo "conflict=$conflict"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: kongeskog/math-compress/.github/actions/setup-hc@main
 
@@ -92,6 +122,9 @@ jobs:
           HEAD_SHA: ${{ steps.merge.outputs.head_sha }}
           BASE_SHA: ${{ steps.merge.outputs.base_sha }}
           CONFLICT: ${{ steps.merge.outputs.conflict }}
+          BASE_TREE: ${{ steps.merge.outputs.base_tree }}
+          MERGED_TREE: ${{ steps.merge.outputs.merged_tree }}
+          STACK_ARGS: ${{ steps.merge.outputs.stack_args }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -104,7 +137,9 @@ jobs:
           author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .user.login)"
           open_prs="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
             --jq '.[].user.login' | grep -cxF "$author" || true)"
-          hc eval --head head --base base --pr "$PR" --head-sha "$HEAD_SHA" --base-sha "$BASE_SHA" \
+          # shellcheck disable=SC2086  # STACK_ARGS is a list of `--stack n@sha` pairs built above
+          hc eval --head head --base stacked --config base/hillclimb.toml --pr "$PR" --head-sha "$HEAD_SHA" --base-sha "$BASE_SHA" \
+            --base-tree "$BASE_TREE" --merged-tree "$MERGED_TREE" $STACK_ARGS \
             --author "$author" --author-open-prs "$open_prs" \
             --out static.json | tee -a "$GITHUB_STEP_SUMMARY"
           if jq -e '[.gates[] | select(.status != "pass")] | length == 0' static.json >/dev/null; then
@@ -138,18 +173,25 @@ jobs:
           path: work
           persist-credentials: false
 
-      - name: Merge the pull request onto main
+      - name: Apply the stack and the pull request
         if: inputs.pr != 0
         env:
           HEAD_SHA: ${{ needs.static.outputs.head_sha }}
+          STACK_SHAS: ${{ needs.static.outputs.stack_shas }}
           PR: ${{ inputs.pr }}
+          STACK: ${{ inputs.stack }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           set -euo pipefail
-          git -C work fetch --quiet --no-tags "$REPO_URL" "pull/$PR/head"
-          # Build exactly the commit the static gates saw, even if the branch moved since.
-          git -C work -c user.name=hillclimb -c user.email=hillclimb@users.noreply.github.com \
-            -c core.hooksPath=/dev/null -c filter.lfs.smudge= -c filter.lfs.process= -c filter.lfs.required=false merge --quiet --no-ff --no-edit "$HEAD_SHA"
+          for n in $STACK $PR; do
+            git -C work fetch --quiet --no-tags "$REPO_URL" "pull/$n/head"
+          done
+          # Build exactly the commits the static gates saw, even if a branch moved since.
+          for sha in $STACK_SHAS $HEAD_SHA; do
+            git -C work -c user.name=hillclimb -c user.email=hillclimb@users.noreply.github.com \
+              -c core.hooksPath=/dev/null -c filter.lfs.smudge= -c filter.lfs.process= -c filter.lfs.required=false \
+              merge --quiet --no-ff --no-edit "$sha"
+          done
 
       - name: Free disk space
         run: |

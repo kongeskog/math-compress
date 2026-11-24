@@ -121,6 +121,28 @@ impl Forge for GhForge {
         Ok(s(&self.get(&format!("commits/{}", self.branch))?, "sha"))
     }
 
+    fn main_tree(&mut self) -> Result<String> {
+        let c = self.get(&format!("commits/{}", self.branch))?;
+        Ok(s(&c["commit"]["tree"], "sha"))
+    }
+
+    fn main_verifies(&mut self, main: &str) -> Result<Option<bool>> {
+        let runs = self.get(&format!(
+            "actions/workflows/{}/runs?event=workflow_dispatch&status=completed&branch={}&per_page=30",
+            self.workflow, self.branch
+        ))?;
+        for run in runs["workflow_runs"].as_array().into_iter().flatten() {
+            if pr_number(&s(run, "display_title")) == Some(0) && s(run, "head_sha") == main {
+                return Ok(match s(run, "conclusion").as_str() {
+                    "success" => Some(true),
+                    "failure" => Some(false),
+                    _ => None,
+                });
+            }
+        }
+        Ok(None)
+    }
+
     fn open_prs(&mut self) -> Result<Vec<PullRequest>> {
         let mut out = Vec::new();
         for item in self.list("pulls?state=open&per_page=100")? {
@@ -149,7 +171,8 @@ impl Forge for GhForge {
         Ok(out)
     }
 
-    fn verify_result(&mut self, pr: u64, head_sha: &str) -> Result<Option<VerifyResult>> {
+    fn verify_results(&mut self, pr: u64, head_sha: &str) -> Result<Vec<VerifyResult>> {
+        let mut out = Vec::new();
         let name = format!("hillclimb-result-{pr}-{head_sha}");
         let listing = self.get(&format!("actions/artifacts?name={name}&per_page=30"))?;
         let mut artifacts: Vec<&Value> = listing["artifacts"]
@@ -164,20 +187,25 @@ impl Forge for GhForge {
             let Some(run_url) = self.trusted_run(run_id)? else { continue };
             let dir = std::env::temp_dir().join(format!("hc-artifact-{run_id}-{pr}"));
             let _ = std::fs::remove_dir_all(&dir);
-            self.gh(&[
+            if let Err(e) = self.gh(&[
                 "run", "download", &run_id.to_string(), "-R", &self.repo, "-n", &name, "-D",
                 &dir.to_string_lossy(),
-            ])?;
-            let text = std::fs::read_to_string(dir.join("result.json"))
-                .context("artifact has no result.json")?;
-            let mut result: VerifyResult = serde_json::from_str(&text)?;
+            ]) {
+                eprintln!("#{pr}: could not download result of run {run_id}: {e:#}");
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(dir.join("result.json")) else { continue };
+            let Ok(mut result) = serde_json::from_str::<VerifyResult>(&text) else { continue };
             if result.pr != pr || result.head_sha != head_sha {
                 continue;
             }
             result.run_url = Some(run_url);
-            return Ok(Some(result));
+            out.push(result);
+            if out.len() >= 6 {
+                break;
+            }
         }
-        Ok(None)
+        Ok(out)
     }
 
     fn active_verifies(&mut self) -> Result<BTreeSet<u64>> {
@@ -196,14 +224,15 @@ impl Forge for GhForge {
         Ok(out)
     }
 
-    fn dispatch_verify(&mut self, pr: u64) -> Result<()> {
+    fn dispatch_verify(&mut self, pr: u64, stack: &[u64]) -> Result<()> {
+        let stack = stack.iter().map(u64::to_string).collect::<Vec<_>>().join(" ");
         if self.dry_run {
-            eprintln!("dry-run: dispatch verify for #{pr}");
+            eprintln!("dry-run: dispatch verify for #{pr} on [{stack}]");
             return Ok(());
         }
         self.gh(&[
             "workflow", "run", &self.workflow, "-R", &self.repo, "--ref", &self.branch, "-f",
-            &format!("pr={pr}"),
+            &format!("pr={pr}"), "-f", &format!("stack={stack}"),
         ])?;
         Ok(())
     }

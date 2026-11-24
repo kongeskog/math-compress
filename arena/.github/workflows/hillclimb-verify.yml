@@ -13,6 +13,11 @@ on:
         description: Pull request number (0 builds main and refreshes the build cache)
         required: true
         type: number
+      stack:
+        description: Pull requests to apply first, in order (space separated; set by the gatekeeper)
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -26,4 +31,5 @@ jobs:
     uses: kongeskog/math-compress/.github/workflows/verify.yml@main
     with:
       pr: ${{ fromJSON(format('{0}', github.event.pull_request.number || inputs.pr)) }}
+      stack: ${{ inputs.stack || '' }}
       dir: vp-vnp

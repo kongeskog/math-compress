@@ -23,6 +23,9 @@ pub const LABEL_REJECTED: &str = "hillclimb:rejected";
 pub const LABEL_READY: &str = "hillclimb:needs-review";
 pub const LABEL_PROPOSED: &str = "idea:proposed";
 pub const LABEL_APPLICATION: &str = "application";
+pub const LABEL_ALERT: &str = "hillclimb:alert";
+/// How many approved changes may be verified stacked on one another.
+pub const MAX_STACK: usize = 6;
 /// Gates the verify workflow must report as passed.
 pub const REQUIRED_RESULT_GATES: &[&str] = &["frozen", "scope", "deny", "improves", "compiles", "same_theorems"];
 /// Words an idea's description must contain (its section headings).
@@ -82,12 +85,19 @@ pub enum CommitState {
 
 pub trait Forge {
     fn main_head(&mut self) -> Result<String>;
+    /// Git tree of the main branch's head commit.
+    fn main_tree(&mut self) -> Result<String>;
+    /// Whether the latest finished build of main itself, at this commit,
+    /// verified. `None` when there is no such build yet.
+    fn main_verifies(&mut self, main: &str) -> Result<Option<bool>>;
     fn open_prs(&mut self) -> Result<Vec<PullRequest>>;
-    /// Latest result for this head produced by the trusted verify workflow.
-    fn verify_result(&mut self, pr: u64, head_sha: &str) -> Result<Option<VerifyResult>>;
+    /// Results for this head produced by the trusted verify workflow, newest first.
+    fn verify_results(&mut self, pr: u64, head_sha: &str) -> Result<Vec<VerifyResult>>;
     /// Pull requests that have a verify run queued or in progress.
     fn active_verifies(&mut self) -> Result<BTreeSet<u64>>;
-    fn dispatch_verify(&mut self, pr: u64) -> Result<()>;
+    /// Verify `pr` on top of main with the pull requests in `stack` applied
+    /// first, in order. `pr == 0` builds main itself.
+    fn dispatch_verify(&mut self, pr: u64, stack: &[u64]) -> Result<()>;
     fn reviews(&mut self, pr: u64) -> Result<Vec<ReviewInfo>>;
     /// Every comment on a pull request written by a person.
     fn pr_comments(&mut self, pr: u64) -> Result<Vec<CommentInfo>>;
@@ -176,6 +186,22 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
 
         let decided_keys: BTreeSet<String> = past.iter().map(|a| key(a.pr, &a.head_sha)).collect();
         let mut main = self.forge.main_head()?;
+        let mut main_tree = self.forge.main_tree()?;
+        // Never merge onto a main that is known not to verify.
+        let mut paused: Option<&str> = None;
+        if self.forge.main_verifies(&main)? == Some(false) {
+            paused = Some("Merging is paused: main itself does not verify");
+            if ledger.alerts.insert(format!("main-broken@{main}")) {
+                self.forge.create_issue(
+                    &format!("Alert: main does not verify at {}", &main[..main.len().min(10)]),
+                    "The latest build of main failed its own verification. Merging is paused until a build of main passes. Leaders: inspect the latest `verify #0` run and repair or revert.",
+                    LABEL_ALERT,
+                )?;
+            }
+            out.log.push("main does not verify; merging paused".into());
+        }
+        // Approved, passing changes that wait for re-verification, in order.
+        let mut ahead: Vec<u64> = Vec::new();
         let active = self.forge.active_verifies()?;
         let mut prs = self.forge.open_prs()?;
         prs.retain(|p| p.base_ref == self.cfg.project.branch && !p.draft);
@@ -186,7 +212,22 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         self.commands(ledger, roles, &prs, &mut issues, past, &active, &mut out.log)?;
 
         for pr in &prs {
-            let result = self.forge.verify_result(pr.number, &pr.head_sha)?;
+            // A result is valid for exactly the tree it was applied to. Prefer the
+            // one for today's main; otherwise the newest one made on main alone
+            // says whether the change is sound in itself; a result stacked on
+            // other changes says nothing until those have merged.
+            let results = self.forge.verify_results(pr.number, &pr.head_sha)?;
+            let is_fresh = |r: &VerifyResult| match &r.base_tree {
+                Some(t) => *t == main_tree,
+                None => r.base_sha == main,
+            };
+            let fresh_result = results.iter().find(|r| is_fresh(r));
+            let fresh = fresh_result.is_some();
+            let speculative_only = !fresh && !results.is_empty() && results.iter().all(|r| !r.stack.is_empty());
+            let result = fresh_result
+                .or(results.iter().find(|r| r.stack.is_empty()))
+                .or(results.first())
+                .cloned();
             let changed = result.as_ref().map(|r| r.changed_files).unwrap_or(0);
             let review = self.review_gate(pr, roles, changed)?;
             let (format, parsed) = self.format_gate(pr);
@@ -222,7 +263,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                     .get(&k)
                     .is_some_and(|t| self.now - *t < Duration::hours(3));
                 if !active.contains(&pr.number) && waited && !recently {
-                    self.forge.dispatch_verify(pr.number)?;
+                    self.forge.dispatch_verify(pr.number, &[])?;
                     ledger.dispatched.insert(k, self.now);
                     out.log.push(format!("#{}: dispatched verification", pr.number));
                 }
@@ -235,7 +276,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
             gates.extend(result.gates.iter().cloned());
             // Anything short of an explicit pass on every required gate is a
             // failure: a skipped or missing check never lets a change through.
-            for required in REQUIRED_RESULT_GATES {
+            for required in REQUIRED_RESULT_GATES.iter().filter(|_| !speculative_only) {
                 match gates.iter_mut().find(|g| g.key == *required) {
                     Some(g) if g.status == GateStatus::Pending => {
                         g.status = GateStatus::Fail;
@@ -243,6 +284,14 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                     }
                     Some(_) => {}
                     None => gates.push(Gate::new(required, GateStatus::Fail, "The check did not run")),
+                }
+            }
+            if speculative_only {
+                // Only stacked results exist; their verdict is not about this
+                // change alone, so nothing is decided from them.
+                for g in gates.iter_mut().skip(1) {
+                    g.status = GateStatus::Pending;
+                    g.detail = Some("Verified only together with changes queued ahead of it".into());
                 }
             }
             let result_failed = gates.iter().skip(1).any(|g| g.status == GateStatus::Fail);
@@ -285,7 +334,6 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 self.forge.set_label(pr.number, LABEL_REJECTED, false)?;
             }
             let approved = review.status == GateStatus::Pass;
-            let fresh = result.base_sha == main;
 
             if !fresh {
                 gates.push(Gate::new(
@@ -300,13 +348,27 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 gates.push(review);
                 attempt.gates = gates;
                 attempt.status = AttemptStatus::Stale;
-                if approved && format_ok && !active.contains(&pr.number) {
-                    let k = format!("{}@{}", key(pr.number, &pr.head_sha), main);
-                    if !ledger.dispatched.contains_key(&k) {
-                        self.forge.dispatch_verify(pr.number)?;
-                        ledger.dispatched.insert(k, self.now);
-                        out.log.push(format!("#{}: re-verifying on new main", pr.number));
+                if approved && format_ok {
+                    // Verify on top of the approved changes ahead of this one,
+                    // so the whole line can merge without a rebuild per merge.
+                    let stack: Vec<u64> = ahead.iter().copied().take(MAX_STACK).collect();
+                    if !active.contains(&pr.number) && ahead.len() <= MAX_STACK {
+                        let heads: Vec<String> = stack
+                            .iter()
+                            .map(|n| prs.iter().find(|p| p.number == *n).map(|p| key(*n, &p.head_sha)).unwrap_or_default())
+                            .collect();
+                        let k = format!("{}@{}@{}", key(pr.number, &pr.head_sha), main_tree, heads.join("+"));
+                        if !ledger.dispatched.contains_key(&k) {
+                            self.forge.dispatch_verify(pr.number, &stack)?;
+                            ledger.dispatched.insert(k, self.now);
+                            out.log.push(if stack.is_empty() {
+                                format!("#{}: re-verifying on new main", pr.number)
+                            } else {
+                                format!("#{}: verifying on top of {:?}", pr.number, stack)
+                            });
+                        }
                     }
+                    ahead.push(pr.number);
                 }
                 self.forge.set_label(pr.number, LABEL_READY, !approved)?;
                 self.publish(pr, &attempt, CommitState::Pending, "Waiting for re-verification on current main")?;
@@ -318,13 +380,15 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
             gates.push(review);
             attempt.gates = gates;
 
-            if !approved || !format_ok {
+            if !approved || !format_ok || paused.is_some() {
                 attempt.status = AttemptStatus::AwaitingReview;
                 self.forge.set_label(pr.number, LABEL_READY, !approved && format_ok)?;
-                let text = if format_ok {
+                let text = if !format_ok {
+                    "Checks passed; the title or description needs fixing"
+                } else if !approved {
                     "All checks passed; waiting for independent review"
                 } else {
-                    "Checks passed; the title or description needs fixing"
+                    paused.unwrap_or("Merging is paused")
                 };
                 self.publish(pr, &attempt, CommitState::Pending, text)?;
                 out.open.push(attempt);
@@ -351,9 +415,22 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                     self.forge.set_label(pr.number, LABEL_READY, false)?;
                     self.forge.upsert_comment(pr.number, &render_comment(self.cfg, &attempt))?;
                     main = merge_sha.clone();
-                    out.current = Some(Point { sha: merge_sha, at: self.now, metrics: result.metrics });
+                    main_tree = self.forge.main_tree()?;
+                    out.current = Some(Point { sha: merge_sha.clone(), at: self.now, metrics: result.metrics });
                     out.log.push(format!("#{}: merged ({delta})", pr.number));
                     out.decided.push(attempt);
+                    // What landed must be exactly what was verified.
+                    if result.merged_tree.as_ref().is_some_and(|t| *t != main_tree) {
+                        paused = Some("Merging is paused: a merge produced a tree that differs from the verified one");
+                        out.log.push(format!("#{}: MERGED TREE DIFFERS FROM THE VERIFIED TREE", pr.number));
+                        if ledger.alerts.insert(format!("tree-mismatch@{merge_sha}")) {
+                            self.forge.create_issue(
+                                &format!("Alert: merge of #{} differs from what was verified", pr.number),
+                                &format!("Commit {merge_sha} on main has a different tree than the one verification built for #{}. Merging is paused for this pass. Leaders: compare the two trees and rebuild main (`verify #0`).", pr.number),
+                                LABEL_ALERT,
+                            )?;
+                        }
+                    }
                 }
                 Err(e) => {
                     out.log.push(format!("#{}: merge failed: {e:#}", pr.number));
@@ -772,7 +849,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                     if ledger.dispatched.get(&k).is_some_and(|t| self.now - *t < Duration::minutes(30)) {
                         continue;
                     }
-                    self.forge.dispatch_verify(n)?;
+                    self.forge.dispatch_verify(n, &[])?;
                     ledger.dispatched.insert(k, self.now);
                     log.push(format!("#{n}: retry requested by {}", c.user));
                 }
@@ -997,6 +1074,9 @@ mod tests {
         main: String,
         prs: Vec<PullRequest>,
         results: BTreeMap<String, VerifyResult>,
+        extra_results: Vec<VerifyResult>,
+        main_ok: Option<bool>,
+        stacks: Vec<Vec<u64>>,
         reviews: BTreeMap<u64, Vec<ReviewInfo>>,
         pr_comments: BTreeMap<u64, Vec<CommentInfo>>,
         young: BTreeSet<String>,
@@ -1019,14 +1099,24 @@ mod tests {
         fn open_prs(&mut self) -> Result<Vec<PullRequest>> {
             Ok(self.prs.clone())
         }
-        fn verify_result(&mut self, pr: u64, head: &str) -> Result<Option<VerifyResult>> {
-            Ok(self.results.get(&key(pr, head)).cloned())
+        fn main_tree(&mut self) -> Result<String> {
+            Ok(format!("tree:{}", self.main))
+        }
+        fn main_verifies(&mut self, _: &str) -> Result<Option<bool>> {
+            Ok(self.main_ok)
+        }
+        fn verify_results(&mut self, pr: u64, head: &str) -> Result<Vec<VerifyResult>> {
+            let mut all: Vec<VerifyResult> =
+                self.extra_results.iter().rev().filter(|r| r.pr == pr && r.head_sha == head).cloned().collect();
+            all.extend(self.results.get(&key(pr, head)).cloned());
+            Ok(all)
         }
         fn active_verifies(&mut self) -> Result<BTreeSet<u64>> {
             Ok(self.active.clone())
         }
-        fn dispatch_verify(&mut self, pr: u64) -> Result<()> {
+        fn dispatch_verify(&mut self, pr: u64, stack: &[u64]) -> Result<()> {
             self.dispatched.push(pr);
+            self.stacks.push(stack.to_vec());
             Ok(())
         }
         fn reviews(&mut self, pr: u64) -> Result<Vec<ReviewInfo>> {
@@ -1103,6 +1193,9 @@ mod tests {
             pr: n,
             head_sha: head(n),
             base_sha: base.into(),
+            base_tree: None,
+            merged_tree: None,
+            stack: vec![],
             metrics: Metrics { tokens, ..Default::default() },
             base_metrics: Metrics { tokens: 1000, ..Default::default() },
             gates: vec![
@@ -1371,6 +1464,101 @@ mod tests {
         m.comments = vec![says(1, "alice", "/retry", 1)];
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.dispatched, [1]);
+    }
+
+    /// Two approved changes, both verified on an older main.
+    fn two_stale() -> Mock {
+        let mut m = base();
+        for n in [1, 2] {
+            m.prs.push(pr(n, "alice"));
+            m.results.insert(key(n, &head(n)), result(n, "old", 900, true));
+            m.reviews.insert(n, vec![approve("bob", &head(n))]);
+        }
+        m
+    }
+
+    fn on_tree(n: u64, base_tree: &str, stack: &[&str], pass: bool) -> VerifyResult {
+        let mut r = result(n, "m0", 900, pass);
+        r.base_tree = Some(base_tree.into());
+        r.merged_tree = Some(format!("tree:merge{n}"));
+        r.stack = stack.iter().map(|s| s.to_string()).collect();
+        r
+    }
+
+    #[test]
+    fn approved_changes_are_verified_as_a_stack_and_merge_as_a_train() {
+        let mut m = two_stale();
+        let mut ledger = Ledger::default();
+        run(&mut m, &mut ledger, &[]);
+        assert!(m.merged.is_empty());
+        assert_eq!(m.stacks, [vec![], vec![1]], "the second is verified on top of the first");
+
+        // Both verifications finish: #1 on main, #2 on main plus #1.
+        m.extra_results.push(on_tree(1, "tree:m0", &[], true));
+        m.extra_results.push(on_tree(2, "tree:merge1", &["1@head1abcdef"], true));
+        let out = run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [1, 2], "both merge in one pass, with no rebuild in between");
+        assert_eq!(m.dispatched.len(), 2);
+        assert_eq!(out.decided.len(), 2);
+    }
+
+    #[test]
+    fn a_failure_seen_only_in_a_stack_decides_nothing_until_the_stack_has_merged() {
+        let mut m = two_stale();
+        m.results.remove(&key(2, &head(2)));
+        m.extra_results.push(on_tree(2, "tree:merge1", &["1@head1abcdef"], false));
+        let out = run(&mut m, &mut Ledger::default(), &[]);
+        assert!(out.decided.is_empty());
+        assert_eq!(out.open.iter().find(|a| a.pr == 2).unwrap().status, AttemptStatus::Stale);
+
+        // Once #1 has merged, the same result is about today's main and counts.
+        m.extra_results.push(on_tree(1, "tree:m0", &[], true));
+        let out = run(&mut m, &mut Ledger::default(), &[]);
+        assert_eq!(m.merged, [1]);
+        assert_eq!(out.decided.iter().find(|a| a.pr == 2).unwrap().status, AttemptStatus::Rejected);
+    }
+
+    #[test]
+    fn a_result_for_another_tree_never_merges() {
+        let mut m = green();
+        m.results.clear();
+        m.extra_results.push(on_tree(1, "tree:something-else", &[], true));
+        m.reviews.insert(1, vec![approve("bob", &head(1))]);
+        run(&mut m, &mut Ledger::default(), &[]);
+        assert!(m.merged.is_empty());
+    }
+
+    #[test]
+    fn a_merge_that_differs_from_the_verified_tree_raises_an_alert_and_pauses() {
+        let mut m = base();
+        for n in [1, 2] {
+            m.prs.push(pr(n, "alice"));
+            m.reviews.insert(n, vec![approve("bob", &head(n))]);
+        }
+        let mut r1 = on_tree(1, "tree:m0", &[], true);
+        r1.merged_tree = Some("tree:unexpected".into());
+        m.extra_results.push(r1);
+        m.extra_results.push(on_tree(2, "tree:merge1", &["1@head1abcdef"], true));
+        let mut ledger = Ledger::default();
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [1], "the next change is held back");
+        assert_eq!(m.created.len(), 1);
+        assert!(m.created[0].starts_with("Alert"));
+    }
+
+    #[test]
+    fn nothing_merges_while_main_does_not_verify() {
+        let mut m = green();
+        m.reviews.insert(1, vec![approve("bob", &head(1))]);
+        m.main_ok = Some(false);
+        let mut ledger = Ledger::default();
+        run(&mut m, &mut ledger, &[]);
+        run(&mut m, &mut ledger, &[]);
+        assert!(m.merged.is_empty());
+        assert_eq!(m.created.len(), 1, "the alert is raised once");
+        m.main_ok = Some(true);
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [1]);
     }
 
     fn idea(n: u64, author: &str, labels: &[&str]) -> IssueInfo {

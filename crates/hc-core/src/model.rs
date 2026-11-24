@@ -115,7 +115,18 @@ pub struct FileStat {
 pub struct VerifyResult {
     pub pr: u64,
     pub head_sha: String,
+    /// Commit of the main branch the verification started from.
     pub base_sha: String,
+    /// Git tree the change was applied to: main, plus the changes queued ahead
+    /// of this one (`stack`). The result is valid for exactly this tree.
+    #[serde(default)]
+    pub base_tree: Option<String>,
+    /// Git tree after applying the change; what main must look like once merged.
+    #[serde(default)]
+    pub merged_tree: Option<String>,
+    /// `pr@head_sha` of the changes that were applied before this one.
+    #[serde(default)]
+    pub stack: Vec<String>,
     pub metrics: Metrics,
     pub base_metrics: Metrics,
     pub gates: Vec<Gate>,
@@ -274,6 +285,9 @@ pub struct Ledger {
     /// `pr@head_sha` keys for which a verify run was dispatched.
     #[serde(default)]
     pub dispatched: BTreeMap<String, DateTime<Utc>>,
+    /// Alerts already raised, so each is raised once.
+    #[serde(default)]
+    pub alerts: std::collections::BTreeSet<String>,
     /// Issues that were already told their title or body is malformed.
     #[serde(default)]
     pub format_notified: std::collections::BTreeSet<u64>,
