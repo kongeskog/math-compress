@@ -52,7 +52,7 @@ export function HillclimbChart(props: ChartProps) {
   const m = () =>
     props.compact
       ? { t: 8, r: 8, b: 8, l: 8 }
-      : { t: 18, r: 18, b: 30, l: width() < 520 ? 44 : 56 };
+      : { t: 18, r: 18, b: 30, l: width() < 520 ? 58 : 68 };
 
   const series = createMemo(() => {
     const key = props.metric;
