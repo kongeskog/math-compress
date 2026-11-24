@@ -68,6 +68,8 @@ jobs:
         with:
           ref: ${{ inputs.branch }}
           path: base
+          # Full history: merging needs the common ancestor of main and the change.
+          fetch-depth: 0
           persist-credentials: false
 
       # `stacked` is main with the changes queued ahead of this one applied;
@@ -171,6 +173,7 @@ jobs:
         with:
           ref: ${{ inputs.pr == 0 && inputs.branch || needs.static.outputs.base_sha }}
           path: work
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Apply the stack and the pull request
