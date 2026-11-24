@@ -53,7 +53,7 @@ The title and description follow a standard, and a change that ignores it does n
 
 - Title: {{title_format}}. Example: `dead-code(Paper/Tree): remove unreferenced lemma cutUnits_id_cur`. The techniques:
 {{techniques}}
-- Description: what you changed, why it is still correct, the before and after score from `hc eval`, and one line on its own that is either `Idea: #<issue number>` for the idea you implemented or `Idea: none`.
+- Description: what you changed, why it is still correct, the before and after score from `hc eval`, and one line on its own naming the idea: `Idea: #<issue number> (complete)` if this change finishes the idea (the idea is then closed when it merges), `Idea: #<issue number>` if it does only part of it (say which part, and what is left, in the description), or `Idea: none`.
 
 You may have at most {{max_open_prs}} pull requests open at once.
 
