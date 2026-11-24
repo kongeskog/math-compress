@@ -169,6 +169,11 @@ fn main() -> Result<()> {
         Cmd::Gate { root, data, dry_run } => gate(&root, &data, dry_run),
         Cmd::Prompt { role, root, site } => {
             let cfg = Config::load(&root.join("hillclimb.toml"))?;
+            // Without `--site`, the dashboard is assumed to be the repository's GitHub Pages site.
+            let site = match (site.is_empty(), cfg.project.repo.split_once('/')) {
+                (true, Some((owner, name))) => format!("https://{}.github.io/{name}/", owner.to_lowercase()),
+                _ => site,
+            };
             print!("{}", render::role_prompt(&role, &cfg, &site)?);
             Ok(())
         }
