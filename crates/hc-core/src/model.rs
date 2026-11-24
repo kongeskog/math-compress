@@ -285,6 +285,10 @@ pub struct Ledger {
     /// `pr@head_sha` keys for which a verify run was dispatched.
     #[serde(default)]
     pub dispatched: BTreeMap<String, DateTime<Utc>>,
+    /// `pr@head_sha` -> the line (`n@head_sha` of each change ahead) its
+    /// latest queued verification was stacked on.
+    #[serde(default)]
+    pub lines: BTreeMap<String, Vec<String>>,
     /// Alerts already raised, so each is raised once.
     #[serde(default)]
     pub alerts: std::collections::BTreeSet<String>,

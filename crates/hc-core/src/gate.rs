@@ -25,7 +25,18 @@ pub const LABEL_PROPOSED: &str = "idea:proposed";
 pub const LABEL_APPLICATION: &str = "application";
 pub const LABEL_ALERT: &str = "hillclimb:alert";
 /// How many approved changes may be verified stacked on one another.
-pub const MAX_STACK: usize = 6;
+pub const MAX_STACK: usize = 10;
+
+/// What a change would be verified on: main and the approved changes ahead.
+struct Line<'a> {
+    main: &'a str,
+    main_tree: &'a str,
+    ahead: &'a [u64],
+    /// Changes with a verification queued or running.
+    active: &'a BTreeSet<u64>,
+    /// `pr@head` of merged changes -> the merge commit.
+    merged: &'a BTreeMap<String, String>,
+}
 /// Gates the verify workflow must report as passed.
 pub const REQUIRED_RESULT_GATES: &[&str] = &["frozen", "scope", "deny", "improves", "compiles", "same_theorems"];
 /// Words an idea's description must contain (its section headings).
@@ -211,6 +222,14 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         let mut ahead: Vec<u64> = Vec::new();
         let active = self.forge.active_verifies()?;
         let current = self.forge.current_verifies()?;
+        // Changes whose verification in the line was dispatched in this pass.
+        let mut queued_now: BTreeSet<u64> = BTreeSet::new();
+        // `pr@head` of merged changes -> the merge commit.
+        let mut merged_heads: BTreeMap<String, String> = past
+            .iter()
+            .filter(|a| a.status == AttemptStatus::Merged)
+            .filter_map(|a| a.merge_sha.clone().map(|m| (key(a.pr, &a.head_sha), m)))
+            .collect();
         let mut prs = self.forge.open_prs()?;
         prs.retain(|p| p.base_ref == self.cfg.project.branch && !p.draft);
         prs.sort_by_key(|p| p.number);
@@ -235,6 +254,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
             attempt.gates = result.map(|r| r.gates.clone()).unwrap_or_default();
             attempt.status = AttemptStatus::Merged;
             attempt.decided_at = Some(merged_at);
+            merged_heads.insert(key(pr.number, &pr.head_sha), merge_sha.clone());
             attempt.merge_sha = Some(merge_sha);
             out.log.push(format!("#{}: merge recovered into the log", pr.number));
             out.decided.push(attempt);
@@ -298,7 +318,11 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 if review.status == GateStatus::Pass && format_ok {
                     let alone_on_main = current.contains(&pr.number) && ahead.is_empty();
                     if !alone_on_main {
-                        joined = self.dispatch_stacked(pr, &prs, &ahead, &main_tree, ledger, &mut out.log)?;
+                        let line = Line { main: &main, main_tree: &main_tree, ahead: &ahead, active: &active, merged: &merged_heads };
+                        joined = self.dispatch_stacked(pr, &prs, &line, ledger, &mut out.log)?;
+                        if joined {
+                            queued_now.insert(pr.number);
+                        }
                     }
                     ahead.push(pr.number);
                 }
@@ -400,7 +424,10 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                     // of this change is still going: that run is about a main
                     // that no longer exists, and waiting for it would let the
                     // line form in the order results happen to arrive.
-                    self.dispatch_stacked(pr, &prs, &ahead, &main_tree, ledger, &mut out.log)?;
+                    let line = Line { main: &main, main_tree: &main_tree, ahead: &ahead, active: &active, merged: &merged_heads };
+                    if self.dispatch_stacked(pr, &prs, &line, ledger, &mut out.log)? {
+                        queued_now.insert(pr.number);
+                    }
                     ahead.push(pr.number);
                 }
                 self.forge.set_label(pr.number, LABEL_READY, !approved)?;
@@ -428,6 +455,29 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 continue;
             }
 
+            // A line of approved changes ahead of this one is being verified on
+            // today's main. Merging this one first would move main under all of
+            // them, so it takes its place at the end of the line instead.
+            if ahead.iter().any(|a| active.contains(a) || queued_now.contains(a)) {
+                let line = Line { main: &main, main_tree: &main_tree, ahead: &ahead, active: &active, merged: &merged_heads };
+                if self.dispatch_stacked(pr, &prs, &line, ledger, &mut out.log)? {
+                    queued_now.insert(pr.number);
+                }
+                if let Some(g) = attempt.gates.iter_mut().find(|g| g.key == "fresh") {
+                    g.status = GateStatus::Pending;
+                    g.detail = Some(format!(
+                        "Passed on today's main; merges after the changes queued ahead of it ({})",
+                        ahead.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", ")
+                    ));
+                }
+                ahead.push(pr.number);
+                attempt.status = AttemptStatus::Stale;
+                self.forge.set_label(pr.number, LABEL_READY, false)?;
+                self.publish(pr, &attempt, CommitState::Pending, "Queued behind the changes ahead of it")?;
+                out.open.push(attempt);
+                continue;
+            }
+
             // Everything is green: merge.
             let delta = attempt.delta.unwrap_or(0);
             let message = format!(
@@ -449,6 +499,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                     self.forge.upsert_comment(pr.number, &render_comment(self.cfg, &attempt))?;
                     main = merge_sha.clone();
                     main_tree = self.forge.main_tree()?;
+                    merged_heads.insert(key(pr.number, &pr.head_sha), merge_sha.clone());
                     out.current = Some(Point { sha: merge_sha.clone(), at: self.now, metrics: result.metrics });
                     out.log.push(format!("#{}: merged ({delta})", pr.number));
                     if let Some(idea) = attempt.idea {
@@ -486,6 +537,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         // Forget dispatch records for pull requests that are gone.
         let open_numbers: BTreeSet<String> = prs.iter().map(|p| format!("{}@", p.number)).collect();
         ledger.dispatched.retain(|k, _| open_numbers.iter().any(|p| k.starts_with(p)));
+        ledger.lines.retain(|k, _| open_numbers.iter().any(|p| k.starts_with(p)));
 
         let mut all: Vec<Attempt> = past.to_vec();
         all.extend(out.decided.iter().cloned());
@@ -553,33 +605,51 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
 
     /// Verify `pr` on today's main with the approved changes ahead of it
     /// applied first. Dispatched once per main, head and line ahead; a longer
-    /// line than `MAX_STACK` waits for the front to merge.
+    /// line than `MAX_STACK` waits for the front to merge. Returns whether a
+    /// run was dispatched now.
     fn dispatch_stacked(
         &mut self,
         pr: &PullRequest,
         prs: &[PullRequest],
-        ahead: &[u64],
-        main_tree: &str,
+        line: &Line,
         ledger: &mut Ledger,
         log: &mut Vec<String>,
     ) -> Result<bool> {
-        if ahead.len() > MAX_STACK {
+        if line.ahead.len() > MAX_STACK {
             return Ok(false);
         }
-        let heads: Vec<String> = ahead
+        let heads: Vec<String> = line
+            .ahead
             .iter()
             .map(|n| prs.iter().find(|p| p.number == *n).map(|p| key(*n, &p.head_sha)).unwrap_or_default())
             .collect();
-        let k = format!("{}@{}@{}", key(pr.number, &pr.head_sha), main_tree, heads.join("+"));
+        let id = key(pr.number, &pr.head_sha);
+        let k = format!("{}@{}@{}", id, line.main_tree, heads.join("+"));
         if ledger.dispatched.contains_key(&k) {
             return Ok(false);
         }
-        self.forge.dispatch_verify(pr.number, ahead)?;
+        // The run that is going was stacked on a longer line whose front has
+        // merged since, and nothing else has: it is building exactly today's
+        // main plus the line that is left, so it is not replaced.
+        if line.active.contains(&pr.number) {
+            if let Some(was) = ledger.lines.get(&id) {
+                if was.len() > heads.len() && was.ends_with(&heads) {
+                    let gone = &was[..was.len() - heads.len()];
+                    let in_order = gone.iter().all(|h| line.merged.contains_key(h));
+                    let last = gone.last().and_then(|h| line.merged.get(h));
+                    if in_order && last.map(String::as_str) == Some(line.main) {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        self.forge.dispatch_verify(pr.number, line.ahead)?;
         ledger.dispatched.insert(k, self.now);
-        log.push(if ahead.is_empty() {
+        ledger.lines.insert(id, heads);
+        log.push(if line.ahead.is_empty() {
             format!("#{}: verifying on today's main", pr.number)
         } else {
-            format!("#{}: verifying on top of {:?}", pr.number, ahead)
+            format!("#{}: verifying on top of {:?}", pr.number, line.ahead)
         });
         Ok(true)
     }
@@ -1652,6 +1722,61 @@ mod tests {
         m.obsolete.insert(1);
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.stacks, [Vec::<u64>::new()]);
+    }
+
+    #[test]
+    fn a_change_that_passed_on_main_waits_behind_the_line_ahead_of_it() {
+        // #1 is approved and being re-verified; #2 already passed on today's main.
+        let mut m = two_stale();
+        m.results.insert(key(2, &head(2)), result(2, "m0", 900, true));
+        let mut ledger = Ledger::default();
+        let out = run(&mut m, &mut ledger, &[]);
+        assert!(m.merged.is_empty(), "merging #2 first would move main under #1");
+        assert_eq!(m.stacks, [vec![], vec![1]]);
+        assert_eq!(out.open.iter().find(|a| a.pr == 2).unwrap().status, AttemptStatus::Stale);
+
+        m.active.extend([1, 2]);
+        m.extra_results.push(on_tree(1, "tree:m0", &[], true));
+        m.extra_results.push(on_tree(2, "tree:merge1", &["1@head1abcdef"], true));
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [1, 2]);
+    }
+
+    #[test]
+    fn a_change_alone_in_the_line_merges_at_once() {
+        // Nothing ahead is being verified, so there is nothing to wait for.
+        let mut m = base();
+        m.prs.push(pr(1, "alice"));
+        m.prs.push(pr(2, "dave"));
+        m.results.insert(key(2, &head(2)), result(2, "m0", 900, true));
+        m.reviews.insert(2, vec![approve("bob", &head(2))]);
+        m.active.insert(1);
+        run(&mut m, &mut Ledger::default(), &[]);
+        assert_eq!(m.merged, [2], "an unapproved change ahead holds nobody up");
+    }
+
+    #[test]
+    fn a_run_stacked_on_a_line_whose_front_merged_is_not_replaced() {
+        let mut m = two_stale();
+        let mut ledger = Ledger::default();
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.stacks, [vec![], vec![1]]);
+
+        // #1's result arrives first; #2's run on main plus #1 is still going.
+        m.active.insert(2);
+        m.extra_results.push(on_tree(1, "tree:m0", &[], true));
+        let out = run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [1]);
+        assert_eq!(m.dispatched.len(), 2, "that run is building exactly today's main");
+        m.prs.remove(0);
+        run(&mut m, &mut ledger, &out.decided);
+        assert_eq!(m.dispatched.len(), 2);
+
+        // It ended without a result for today's main: verify again.
+        m.active.clear();
+        run(&mut m, &mut ledger, &out.decided);
+        assert_eq!(m.stacks.last().unwrap(), &Vec::<u64>::new());
+        assert_eq!(m.dispatched.len(), 3);
     }
 
     fn on_tree(n: u64, base_tree: &str, stack: &[&str], pass: bool) -> VerifyResult {

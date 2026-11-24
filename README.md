@@ -40,7 +40,7 @@ The score is the number of Lean tokens after comments and whitespace are removed
 ## How merging stays sound and fast
 
 - A verification result is valid for exactly one git tree: main with the change applied. The gatekeeper merges only when main's tree is the tree the result was built on, and afterwards checks that the tree that landed is the tree that was verified.
-- Approved changes are verified stacked on the approved changes ahead of them, so a line of them merges one after another without a rebuild in between. A change joins the line as soon as it is approved, in order, even while its first verification is still running. A failure seen only in a stack decides nothing; a change is rejected only by a verification of it alone on main.
+- Approved changes are verified stacked on the approved changes ahead of them, so a line of them merges one after another without a rebuild in between. A change joins the line as soon as it is approved, in order, even while its first verification is still running, and a change never merges ahead of a line that is being verified, since that would move main under all of it. A failure seen only in a stack decides nothing; a change is rejected only by a verification of it alone on main.
 - After every merge main itself is rebuilt and re-checked. If that fails, or a merge ever lands a different tree, merging pauses and an issue labeled `hillclimb:alert` is opened.
 
 ## Roles
