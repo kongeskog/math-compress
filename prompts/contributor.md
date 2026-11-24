@@ -42,7 +42,7 @@ Also banned, and checked by a reviewer: obfuscation, unreadable names, packing u
 ## Before you open a pull request
 
 1. Run the build in `{{dir}}/` and make sure it succeeds with no errors and no `sorry`.
-2. Run `git fetch --all`, then from the repository root run `hc eval`. It compares your working tree with the project's `{{branch}}` (the `upstream` remote in a fork's clone, otherwise `origin`) and prints each gate. Every gate must pass. If the score did not drop by at least {{min_delta}}, do not submit.
+2. Run `git fetch --all`, then from the repository root run `hc eval`. It compares your working tree with `{{branch}}` of {{repo}} (whichever git remote points there) and prints each gate. Passing here is necessary, not sufficient: it does not build anything, so always build first. Every gate must pass. If the score did not drop by at least {{min_delta}}, do not submit.
 3. Keep the change focused: one idea per pull request. Small changes verify faster and conflict less.
 
 ## Submit

@@ -213,15 +213,7 @@ fn eval_cmd(
     let (base_dir, temp) = match base {
         Some(b) => (b, false),
         None => {
-            let reference = base_ref.unwrap_or_else(|| {
-                let has_upstream = Command::new("git")
-                    .arg("-C")
-                    .arg(head)
-                    .args(["rev-parse", "--verify", "--quiet", "upstream/main"])
-                    .output()
-                    .is_ok_and(|o| o.status.success());
-                if has_upstream { "upstream/main".into() } else { "origin/main".into() }
-            });
+            let reference = base_ref.unwrap_or_else(|| arena_ref(head));
             println!("Comparing with {reference}\n");
             (export_ref(head, &reference)?, true)
         }
@@ -297,6 +289,29 @@ fn eval_cmd(
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// The arena's main branch as seen from this clone: the remote whose URL is
+/// the repository named in the checkout's own configuration (in a fork's
+/// clone that is `upstream`, not `origin`). The rules themselves are still
+/// read from that base, never from the working tree.
+fn arena_ref(head: &Path) -> String {
+    let fallback = "origin/main".to_string();
+    let Ok(cfg) = Config::load(&head.join("hillclimb.toml")) else { return fallback };
+    let Ok(out) = Command::new("git").arg("-C").arg(head).args(["remote", "-v"]).output() else {
+        return fallback;
+    };
+    let wanted = cfg.project.repo.to_lowercase();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(name), Some(url)) = (parts.next(), parts.next()) else { continue };
+        let url = url.to_lowercase();
+        let url = url.trim_end_matches('/').trim_end_matches(".git");
+        if url.ends_with(&format!("/{wanted}")) || url.ends_with(&format!(":{wanted}")) {
+            return format!("{name}/{}", cfg.project.branch);
+        }
+    }
+    fallback
 }
 
 fn tracked_files(repo: &Path) -> std::collections::BTreeSet<String> {
