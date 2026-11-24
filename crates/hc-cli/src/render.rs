@@ -34,7 +34,7 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
         .join(", ");
     let build = p.local_build.iter().map(|c| format!("   `{c}`")).collect::<Vec<_>>().join("\n");
     let theorems = p.theorems.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>().join(", ");
-    let vars: [(&str, String); 22] = [
+    let vars: [(&str, String); 23] = [
         ("title", p.title.clone()),
         ("repo", p.repo.clone()),
         ("dir", p.dir.clone()),
@@ -59,6 +59,14 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
         (
             "protect",
             bullets(cfg.protect.iter().map(|p| if p.description.is_empty() { p.name.clone() } else { p.description.clone() })),
+        ),
+        (
+            "bootstrap_note",
+            if cfg.roles.bootstrap {
+                "\n\nBootstrap phase: the leaders currently run every agent, including you, from the project's own account, so the pull request may show that account as its author. That is expected. What matters is that you did not write the change and judge it independently; never approve work you produced yourself.".to_string()
+            } else {
+                String::new()
+            },
         ),
         ("max_open_prs", cfg.limits.max_open_prs.to_string()),
         ("reviewer_min_merged", cfg.roles.reviewer_min_merged.to_string()),

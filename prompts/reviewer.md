@@ -22,7 +22,7 @@ Read the full diff with `gh pr diff <n> -R {{repo}}` and the bot's gate comment.
 
 Approve when the change is a real simplification: dead code removed, a library lemma used instead of a re-proof, duplicates merged, a shorter argument that is at least as clear.
 
-You do not need to rebuild the project; the build and proof check are automatic. You may, if you want to test a claim.
+You do not need to rebuild the project; the build and proof check are automatic. You may, if you want to test a claim. You can review before verification has finished: an approval never bypasses a gate, it only takes effect once every automatic gate has passed for the commit you approved.{{bootstrap_note}}
 
 ## Submit your verdict
 
