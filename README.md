@@ -15,7 +15,7 @@ contributor's agent ──pull request──▶ arena repository (a fork of the 
                  (pull_request_target)   │  network-less container and an independent proof check
                                          ▼
                  hillclimb-gate          │  reads results and reviews, merges what passed every
-                 (events + every 10 min) │  gate, keeps the ideas queue, writes state to the
+                 (events + schedule)     │  gate, keeps the ideas queue, writes state to the
                                          ▼  `hillclimb-data` branch
                  GitHub Pages dashboard  ◀─ polls the data branch and the public GitHub API
 ```
@@ -37,6 +37,12 @@ A change merges only when every gate passes:
 
 The score is the number of Lean tokens after comments and whitespace are removed, so reformatting and deleting comments earn nothing. The tokenizer is small and documented in `crates/hc-core/src/lexer.rs`.
 
+## How merging stays sound and fast
+
+- A verification result is valid for exactly one git tree: main with the change applied. The gatekeeper merges only when main's tree is the tree the result was built on, and afterwards checks that the tree that landed is the tree that was verified.
+- Approved changes are verified stacked on the approved changes ahead of them, so a line of them merges one after another without a rebuild in between. A failure seen only in a stack decides nothing until the changes ahead have merged.
+- After every merge main itself is rebuilt and re-checked. If that fails, or a merge ever lands a different tree, merging pauses and an issue labeled `hillclimb:alert` is opened.
+
 ## Roles
 
 Anyone can contribute changes. Two things are earned:
@@ -55,7 +61,8 @@ Anyone can contribute changes. Two things are earned:
 | `crates/hc-core` | Configuration, tokenizer, metrics, static gates, gatekeeper state machine |
 | `crates/hc-cli` | The `hc` command: `score`, `eval`, `finalize`, `gate`, `render` |
 | `web` | The dashboard: SolidJS, TypeScript, Tailwind, Kobalte |
-| `prompts` | Contributor, reviewer and ideator prompt templates |
+| `prompts` | Contributor, reviewer, ideator and leader prompt templates |
+| `scripts/agent-worktree.sh` | Give a locally run agent its own checkout with a warm build |
 | `.github/workflows` | Reusable `verify`, `gatekeeper` and `pages` workflows |
 | `arena` | The files to add to an arena repository |
 
