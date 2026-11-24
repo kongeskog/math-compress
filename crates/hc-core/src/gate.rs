@@ -37,6 +37,9 @@ struct Line<'a> {
     /// `pr@head` of merged changes -> the merge commit.
     merged: &'a BTreeMap<String, String>,
 }
+/// How long after its dispatch a verification is assumed to be running even
+/// if no run is seen: longer than a build takes, shorter than a hung one.
+pub const RUN_GRACE_MINUTES: i64 = 40;
 /// Gates the verify workflow must report as passed.
 pub const REQUIRED_RESULT_GATES: &[&str] = &["frozen", "scope", "deny", "improves", "compiles", "same_theorems"];
 /// Words an idea's description must contain (its section headings).
@@ -657,8 +660,16 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         let built = |was: &Vec<String>| {
             results.iter().any(|r| r.stack == *was && Some(&r.base_sha) == base)
         };
+        // A run can be missed for a moment between two of its jobs, and
+        // replacing it then throws away a build that is about to report. So a
+        // run dispatched recently is taken to be going even when it is not seen.
+        let prefix = format!("{id}@");
+        let recent = ledger
+            .dispatched
+            .iter()
+            .any(|(k, t)| k.starts_with(&prefix) && self.now - *t < Duration::minutes(RUN_GRACE_MINUTES));
         if let Some(was) = ledger.lines.get(&id) {
-            if line.active.contains(&pr.number) || built(was) {
+            if line.active.contains(&pr.number) || recent || built(was) {
                 if was.len() > heads.len() && was.ends_with(&heads) {
                     let gone = &was[..was.len() - heads.len()];
                     let in_order = gone.iter().all(|h| line.merged.contains_key(h));
@@ -1804,8 +1815,13 @@ mod tests {
         run(&mut m, &mut ledger, &out.decided);
         assert_eq!(m.dispatched.len(), 2);
 
-        // It ended without a result for today's main: verify again.
+        // It is not seen for a moment, between two of its jobs: still not replaced.
         m.active.clear();
+        run(&mut m, &mut ledger, &out.decided);
+        assert_eq!(m.dispatched.len(), 2);
+
+        // It ended without a result for today's main: verify again.
+        ledger.dispatched.values_mut().for_each(|at| *at -= Duration::hours(1));
         run(&mut m, &mut ledger, &out.decided);
         assert_eq!(m.stacks.last().unwrap(), &Vec::<u64>::new());
         assert_eq!(m.dispatched.len(), 3);
@@ -1831,6 +1847,7 @@ mod tests {
         m.extra_results.push(on_tree(1, "tree:m0", &[], true));
         m.extra_results.retain(|r| r.pr != 2);
         m.active.insert(2);
+        ledger.dispatched.values_mut().for_each(|at| *at -= Duration::hours(1));
         let out = run(&mut m, &mut ledger, &[]);
         assert_eq!(m.merged, [1]);
         assert_eq!(m.dispatched.len(), 3, "#3's finished run is not repeated");
@@ -1840,6 +1857,7 @@ mod tests {
 
         // A result for the same line from another main does not count.
         ledger.line_bases.insert(key(3, &head(3)), "elsewhere".into());
+        ledger.dispatched.values_mut().for_each(|at| *at -= Duration::hours(1));
         run(&mut m, &mut ledger, &out.decided);
         assert_eq!(m.dispatched.len(), 4);
     }

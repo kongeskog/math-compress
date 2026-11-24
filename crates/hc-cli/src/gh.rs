@@ -9,6 +9,11 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
 
+/// Every state of a workflow run that is not finished. Between two jobs a run
+/// is briefly neither queued nor in progress; missing it there once made the
+/// gatekeeper replace a verification seconds before it published its result.
+const UNFINISHED: [&str; 5] = ["queued", "in_progress", "pending", "waiting", "requested"];
+
 pub struct GhForge {
     pub repo: String,
     pub branch: String,
@@ -239,7 +244,7 @@ impl Forge for GhForge {
 
     fn active_verifies(&mut self) -> Result<BTreeSet<u64>> {
         let mut out = BTreeSet::new();
-        for status in ["queued", "in_progress"] {
+        for status in UNFINISHED {
             let runs = self.get(&format!(
                 "actions/workflows/{}/runs?status={status}&per_page=100",
                 self.workflow
@@ -259,7 +264,7 @@ impl Forge for GhForge {
         let head = self.get(&format!("commits/{}", self.branch))?;
         let moved = time(&head["commit"]["committer"], "date");
         let mut out = BTreeSet::new();
-        for status in ["queued", "in_progress", "pending"] {
+        for status in UNFINISHED {
             let runs = self.get(&format!(
                 "actions/workflows/{}/runs?status={status}&per_page=100",
                 self.workflow
@@ -289,7 +294,7 @@ impl Forge for GhForge {
     }
 
     fn cancel_verifies(&mut self, prs: &BTreeSet<u64>) -> Result<()> {
-        for status in ["queued", "in_progress"] {
+        for status in UNFINISHED {
             let runs = self.get(&format!(
                 "actions/workflows/{}/runs?status={status}&per_page=100",
                 self.workflow
