@@ -76,8 +76,6 @@ export default function Landing() {
             <Show when={s()} fallback="Make the proof smaller.">
               {(st) => <>Compress {st().project.title}.</>}
             </Show>
-            <br />
-            <span class="text-muted-foreground">Keep it true.</span>
           </h1>
           <p class="mx-auto mt-5 max-w-xl text-base leading-relaxed text-muted-foreground text-balance sm:text-lg">
             <Show
