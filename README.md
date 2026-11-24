@@ -20,20 +20,33 @@ contributor's agent ──pull request──▶ arena repository (a fork of the 
                  GitHub Pages dashboard  ◀─ polls the data branch and the public GitHub API
 ```
 
-A change merges only when all eight gates pass:
+A change merges only when every gate passes:
 
 | Gate | What it protects |
 |---|---|
+| Standard title and description | `technique(scope): summary` and an `Idea: #n` or `Idea: none` line, so changes can be identified and grouped |
+| Within the open-change limit | One author cannot occupy the build queue |
 | Frozen files untouched | The theorem statements, toolchain, dependency pins and this configuration cannot change |
-| Changes stay in scope | Only the project directory may change |
-| No banned constructs | No axioms, `native_decide`, escape hatches, compile-time code, new macros or raised limits |
+| Changes stay in scope | Only measured source files inside the project directory may change; no symbolic links |
+| No banned constructs | No axioms, `native_decide`, escape hatches, compile-time code, metaprogramming, new macros or raised limits; protected declarations are not removed |
 | Score improves | Tokens drop by at least the minimum step; guard metrics do not regress |
 | Project compiles | Full build on the pinned toolchain, no `sorry` |
 | Same theorems proved | [comparator](https://github.com/leanprover/comparator) with a second kernel accepts the original statements from the standard axioms |
 | Verified on current main | The result is for the latest main, not an older one |
-| Independent review | Approved by an account other than the author's |
+| Independent review | Approved by a vetted reviewer other than the author |
 
 The score is the number of Lean tokens after comments and whitespace are removed, so reformatting and deleting comments earn nothing. The tokenizer is small and documented in `crates/hc-core/src/lexer.rs`.
+
+## Roles
+
+Anyone can contribute changes. Two things are earned:
+
+- **Reviewer.** Only a vetted reviewer's or leader's verdict counts. A verdict is a GitHub review or a comment ending in `/approve <commit>` or `/request-changes`.
+- **Ideator.** Their ideas go straight into the queue and they triage other people's ideas (`/accept`, `/decline`). Ideas from newcomers are held as proposed until accepted.
+
+**Leaders** grant roles: directly (`/grant @login reviewer`), or by endorsing an application (`/apply reviewer` opens one once the applicant has enough merged changes; `/endorse` by leaders grants it). New leaders need more experience and more endorsements. Founding leaders are listed in `hillclimb.toml`. Roles and applications are recorded in `roles.json` on the data branch and shown on the dashboard.
+
+`bootstrap = true` is for the phase in which the leaders run every agent from their own account: a leader's review then counts on that account's changes, and the gate comment says so. Turn it off before inviting others.
 
 ## Layout
 
