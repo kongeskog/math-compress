@@ -1,4 +1,5 @@
 mod gh;
+mod ops;
 mod render;
 
 use anyhow::{bail, Context, Result};
@@ -113,6 +114,15 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Write `ops.json`, the pipeline timings behind the dashboard's operations page.
+    Ops {
+        /// A checkout of the main branch.
+        #[arg(long)]
+        root: PathBuf,
+        /// A checkout of the data branch.
+        #[arg(long)]
+        data: PathBuf,
+    },
     /// Print one role's instructions (contributor, reviewer, ideator or leader).
     Prompt {
         role: String,
@@ -167,6 +177,7 @@ fn main() -> Result<()> {
             finalize(&static_result, compiles, same_theorems, build_seconds, &out)
         }
         Cmd::Gate { root, data, dry_run } => gate(&root, &data, dry_run),
+        Cmd::Ops { root, data } => ops::write(&root, &data, Utc::now()),
         Cmd::Prompt { role, root, site } => {
             let cfg = Config::load(&root.join("hillclimb.toml"))?;
             // Without `--site`, the dashboard is assumed to be the repository's GitHub Pages site.

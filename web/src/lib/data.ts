@@ -1,5 +1,5 @@
 import { createMemo, createRoot, createSignal } from "solid-js";
-import type { Attempt, Config, PromptRole, RolesState, Rules, State } from "./types";
+import type { Attempt, Config, Ops, PromptRole, RolesState, Rules, State } from "./types";
 
 const POLL_MS = 60_000;
 
@@ -51,6 +51,7 @@ export const store = createRoot(() => {
   const [livePulls, setLivePulls] = createSignal<GhPull[]>([]);
   const [rules, setRules] = createSignal<Rules>();
   const [roles, setRoles] = createSignal<RolesState>();
+  const [ops, setOps] = createSignal<Ops>();
   const [prompts, setPrompts] = createSignal<Partial<Record<PromptRole, string>>>({});
   const [fetchedAt, setFetchedAt] = createSignal<number>();
   const [error, setError] = createSignal<string>();
@@ -65,12 +66,15 @@ export const store = createRoot(() => {
     if (!c) return;
     const base = c.dataUrl.replace(/\/$/, "");
     try {
-      const [s, a, r] = await Promise.all([
+      const [s, a, r, o] = await Promise.all([
         getJson<State>(`${base}/state.json`),
         getText(`${base}/attempts.jsonl`).catch(() => ""),
         // Older data branches have no roles file.
         getJson<RolesState>(`${base}/roles.json`).catch(() => undefined),
+        // Written by a later step of the gatekeeper; older data branches have none.
+        getJson<Ops>(`${base}/ops.json`).catch(() => undefined),
       ]);
+      if (o) setOps(o);
       setState(s);
       if (r) setRoles({ bootstrap: !!r.bootstrap, members: r.members ?? [], applications: r.applications ?? [] });
       setDecided(
@@ -174,6 +178,7 @@ export const store = createRoot(() => {
     find,
     rules,
     roles,
+    ops,
     bootstrap,
     prompts,
     fetchedAt,

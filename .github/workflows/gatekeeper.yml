@@ -59,6 +59,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: hc gate --root main --data data | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # Timings of pull requests, reviews and verification runs for the
+      # dashboard's operations page. Read-only, and never allowed to fail the pass.
+      - name: Operations data
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: hc ops --root main --data data
+
       - name: Publish dashboard data
         env:
           DATA_BRANCH: ${{ inputs.data-branch }}

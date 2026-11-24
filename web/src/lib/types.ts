@@ -111,3 +111,35 @@ export type Rules = {
   commands?: { command: string; who: string; where: string; does: string }[];
 };
 export type PromptRole = "invite";
+
+/** Raw pipeline timings written by `hc ops`; the operations page derives everything from them. */
+export type OpsVerdict = { at: string; approve: boolean };
+export type OpsPr = {
+  pr: number;
+  title: string;
+  status: "open" | "merged" | "closed";
+  created_at: string;
+  closed_at?: string | null;
+  delta?: number | null;
+  idea?: number | null;
+  verdicts: OpsVerdict[];
+};
+export type OpsRun = {
+  id: number;
+  /** 0 is a build of main */
+  pr: number;
+  kind: "own" | "line" | "main";
+  created_at: string;
+  started_at: string;
+  ended_at?: string | null;
+  outcome: string;
+};
+export type OpsIdea = {
+  number: number;
+  title: string;
+  created_at: string;
+  closed_at?: string | null;
+  claimed_at?: string | null;
+  pr_at?: string | null;
+};
+export type Ops = { window_start: string; prs: OpsPr[]; runs: OpsRun[]; ideas: OpsIdea[] };
