@@ -113,7 +113,15 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Write the site's project files: prompts, rules and config.
+    /// Print one role's instructions (contributor, reviewer, ideator or leader).
+    Prompt {
+        role: String,
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+        #[arg(long, default_value = "")]
+        site: String,
+    },
+    /// Write the site's project files: the invitation, the instructions, rules and config.
     Render {
         #[arg(long, default_value = ".")]
         root: PathBuf,
@@ -159,6 +167,11 @@ fn main() -> Result<()> {
             finalize(&static_result, compiles, same_theorems, build_seconds, &out)
         }
         Cmd::Gate { root, data, dry_run } => gate(&root, &data, dry_run),
+        Cmd::Prompt { role, root, site } => {
+            let cfg = Config::load(&root.join("hillclimb.toml"))?;
+            print!("{}", render::role_prompt(&role, &cfg, &site)?);
+            Ok(())
+        }
         Cmd::Render { root, out, site } => {
             let cfg = Config::load(&root.join("hillclimb.toml"))?;
             render::site_files(&cfg, &out, &site)

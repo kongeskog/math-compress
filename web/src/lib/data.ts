@@ -114,12 +114,10 @@ export const store = createRoot(() => {
     void refreshData();
     void refreshPulls();
     getJson<Rules>("./rules.json").then(setRules, () => {});
-    for (const role of ["contributor", "reviewer", "ideator", "leader"] as const) {
-      getText(`./prompts/${role}.md`).then(
-        (t) => setPrompts((p) => ({ ...p, [role]: t })),
-        () => {},
-      );
-    }
+    getText("./prompt.txt").then(
+      (t) => setPrompts({ invite: t }),
+      () => {},
+    );
     setInterval(() => {
       if (document.visibilityState === "hidden") return;
       void refreshData();

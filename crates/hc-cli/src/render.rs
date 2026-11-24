@@ -80,12 +80,31 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
     out
 }
 
+pub fn role_prompt(role: &str, cfg: &Config, site: &str) -> Result<String> {
+    let template = match role {
+        "contributor" => CONTRIBUTOR,
+        "reviewer" => REVIEWER,
+        "ideator" => IDEATOR,
+        "leader" => LEADER,
+        other => anyhow::bail!("unknown role `{other}`"),
+    };
+    Ok(prompt(template, cfg, site))
+}
+
 pub fn site_files(cfg: &Config, out: &Path, site: &str) -> Result<()> {
-    let prompts = out.join("prompts");
-    std::fs::create_dir_all(&prompts)?;
-    for (name, template) in [("contributor", CONTRIBUTOR), ("reviewer", REVIEWER), ("ideator", IDEATOR), ("leader", LEADER)] {
-        std::fs::write(prompts.join(format!("{name}.md")), prompt(template, cfg, site))?;
-    }
+    // The public site carries one invitation: a one-line prompt that points
+    // at the full contributor instructions. The reviewer, ideator and leader
+    // prompts stay in the harness repository for those who hold the role.
+    std::fs::create_dir_all(out)?;
+    let site = if site.ends_with('/') { site.to_string() } else { format!("{site}/") };
+    std::fs::write(out.join("join.txt"), prompt(CONTRIBUTOR, cfg, &site))?;
+    std::fs::write(
+        out.join("prompt.txt"),
+        format!(
+            "Fetch and follow the instructions at {site}join.txt to join the effort to shorten the machine-checked proof of {} with me\n",
+            cfg.project.title
+        ),
+    )?;
 
     let rules = json!({
         "gates": GATES.iter().map(|g| json!({"key": g.0, "label": g.1, "description": g.2})).collect::<Vec<_>>(),
