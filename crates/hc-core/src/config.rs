@@ -265,11 +265,18 @@ impl Default for Ideas {
 pub struct Build {
     /// File name of the verify workflow in the arena repository.
     pub workflow: String,
+    /// File name of the workflow that deploys the dashboard.
+    #[serde(default = "default_pages")]
+    pub pages_workflow: String,
+}
+
+fn default_pages() -> String {
+    "hillclimb-pages.yml".into()
 }
 
 impl Default for Build {
     fn default() -> Self {
-        Build { workflow: "hillclimb-verify.yml".into() }
+        Build { workflow: "hillclimb-verify.yml".into(), pages_workflow: default_pages() }
     }
 }
 

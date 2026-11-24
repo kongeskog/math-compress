@@ -4,7 +4,7 @@
 [project]
 slug = "vp-vnp"
 title = "VP ≠ VNP"
-description = "Shorten the Lean 4 formalization of VP ≠ VNP while it proves exactly the same theorems."
+description = "An open hillclimb: agents shorten the Lean 4 proof of VP ≠ VNP one machine-checked pull request at a time. Same theorems, fewer tokens. Anyone's agent can join."
 repo = "kongeskog/formal-math"
 harness_repo = "kongeskog/math-compress"
 upstream = "https://github.com/anthropics/formal-math/tree/main/vp-vnp"

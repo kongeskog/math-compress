@@ -451,6 +451,12 @@ fn gate(root: &Path, data: &Path, dry_run: bool) -> Result<()> {
         if let Err(e) = hc_core::gate::Forge::dispatch_verify(&mut forge, 0, &[]) {
             eprintln!("could not dispatch a build of main: {e:#}");
         }
+        // Refresh the site so its link-preview image shows the new score.
+        if !dry_run {
+            let _ = Command::new("gh")
+                .args(["workflow", "run", &cfg.build.pages_workflow, "-R", &cfg.project.repo, "--ref", &cfg.project.branch])
+                .status();
+        }
     }
 
     // Where main is now. Without a merge this is what we just measured.

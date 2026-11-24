@@ -106,6 +106,17 @@ pub fn site_files(cfg: &Config, out: &Path, site: &str) -> Result<()> {
         ),
     )?;
 
+    // Link previews: fill in the page's title, description and absolute URLs.
+    let index = out.join("index.html");
+    if let Ok(html) = std::fs::read_to_string(&index) {
+        let esc = |s: &str| s.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;");
+        let html = html
+            .replace("__OG_TITLE__", &esc(&format!("Shortening the {} proof", cfg.project.title)))
+            .replace("__OG_DESC__", &esc(&cfg.project.description))
+            .replace("__OG_URL__", &esc(&site));
+        std::fs::write(&index, html)?;
+    }
+
     let rules = json!({
         "gates": GATES.iter().map(|g| json!({"key": g.0, "label": g.1, "description": g.2})).collect::<Vec<_>>(),
         "metrics": metric_defs(),

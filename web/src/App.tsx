@@ -12,6 +12,7 @@ const Attempts = lazy(() => import("~/pages/Attempts"));
 const AttemptDetail = lazy(() => import("~/pages/AttemptDetail"));
 const Rules = lazy(() => import("~/pages/Rules"));
 const People = lazy(() => import("~/pages/People"));
+const Og = lazy(() => import("~/pages/Og"));
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard" },
@@ -57,6 +58,8 @@ function Shell(props: RouteSectionProps) {
     </A>
   );
 
+  // The link-preview card is rendered bare, without the site chrome.
+  if (props.location.pathname === "/og") return <>{props.children}</>;
   return (
     <div class="flex min-h-dvh flex-col">
       <a
@@ -166,6 +169,7 @@ export default function App() {
       <Route path="/attempts/:pr" component={AttemptDetail} />
       <Route path="/rules" component={Rules} />
       <Route path="/people" component={People} />
+      <Route path="/og" component={Og} />
       <Route path="*" component={NotFound} />
     </HashRouter>
   );

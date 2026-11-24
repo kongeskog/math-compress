@@ -64,6 +64,12 @@ jobs:
         env:
           SITE: ${{ steps.pages.outputs.base_url }}
         run: hc render --root arena --out harness/web/dist --site "$SITE/"
+      # The image that link previews show: the card at #/og, rendered with the
+      # runner's own Chrome against the live data.
+      - name: Render the link-preview image
+        working-directory: harness/web
+        continue-on-error: true
+        run: node scripts/og.mjs dist --channel chrome
       - uses: actions/upload-pages-artifact@v3
         with:
           path: harness/web/dist
