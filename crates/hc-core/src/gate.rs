@@ -211,11 +211,12 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 self.publish(pr, &attempt, CommitState::Failure, "Rejected: a gate failed")?;
                 self.forge.set_label(pr.number, LABEL_REJECTED, true)?;
                 self.forge.set_label(pr.number, LABEL_READY, false)?;
+                // A rejected head lives in the decided log, not among the open
+                // attempts; a new push starts a new attempt.
                 if !decided_keys.contains(&key(pr.number, &pr.head_sha)) {
                     out.log.push(format!("#{}: rejected", pr.number));
-                    out.decided.push(attempt.clone());
+                    out.decided.push(attempt);
                 }
-                out.open.push(attempt);
                 continue;
             }
 
@@ -773,9 +774,10 @@ mod tests {
         assert!(m.merged.is_empty());
         assert_eq!(out.decided.len(), 1);
         assert_eq!(out.decided[0].status, AttemptStatus::Rejected);
+        assert!(out.open.is_empty());
         let again = run(&mut m, &mut Ledger::default(), &out.decided);
         assert!(again.decided.is_empty());
-        assert_eq!(again.open[0].status, AttemptStatus::Rejected);
+        assert!(again.open.is_empty());
     }
 
     #[test]
@@ -854,7 +856,7 @@ mod tests {
             m.reviews.insert(1, vec![approve("bob", "head1")]);
             let out = run(&mut m, &mut Ledger::default(), &[]);
             assert!(m.merged.is_empty());
-            assert_eq!(out.open[0].status, AttemptStatus::Rejected);
+            assert_eq!(out.decided[0].status, AttemptStatus::Rejected);
         }
     }
 

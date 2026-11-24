@@ -336,7 +336,7 @@ fn gate(root: &Path, data: &Path, dry_run: bool) -> Result<()> {
     let baseline = previous.as_ref().map(|p| p.baseline.clone()).unwrap_or_else(|| current.clone());
 
     let mut board: BTreeMap<String, Leader> = BTreeMap::new();
-    for a in attempts.iter().chain(out.open.iter().filter(|a| a.status != AttemptStatus::Rejected)) {
+    for a in attempts.iter().chain(out.open.iter()) {
         let l = board.entry(a.author.clone()).or_insert_with(|| Leader {
             login: a.author.clone(),
             merged: 0,

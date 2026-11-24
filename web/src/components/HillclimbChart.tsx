@@ -123,6 +123,11 @@ export function HillclimbChart(props: ChartProps) {
   });
 
   const yTicks = createMemo(() => scales().y.ticks(props.compact ? 3 : 5));
+  // When the visible range is small, abbreviated labels would all read the same.
+  const yTickStep = createMemo(() => {
+    const t = yTicks();
+    return t.length > 1 ? Math.abs(t[1] - t[0]) : Infinity;
+  });
   const xTicks = createMemo(() => {
     const sc = scales();
     const count = Math.max(2, Math.min(8, Math.floor(sc.w / 110)));
@@ -138,7 +143,11 @@ export function HillclimbChart(props: ChartProps) {
   });
 
   const fmtTick = (v: number) =>
-    props.metric === "build_seconds" ? `${(v / 60).toFixed(1)}m` : compact(v);
+    props.metric === "build_seconds"
+      ? `${(v / 60).toFixed(1)}m`
+      : yTickStep() < 1000
+        ? v.toLocaleString("en-US")
+        : compact(v);
 
   function onMove(e: PointerEvent) {
     if (props.compact) return;
