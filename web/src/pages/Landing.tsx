@@ -62,13 +62,13 @@ export default function Landing() {
           <Show when={s()}>
             {(st) => (
               <a
-                href={`https://github.com/${st().project.upstream}`}
+                href={/^https?:\/\//.test(st().project.upstream) ? st().project.upstream : `https://github.com/${st().project.upstream}`}
                 target="_blank"
                 rel="noreferrer"
                 class="fade-in mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
               >
                 <span class="size-1.5 rounded-full bg-good" />
-                Open hillclimb on {st().project.upstream}
+                Open hillclimb on {st().project.upstream.replace(/^https?:\/\/github\.com\//, "").split("/").slice(0, 2).join("/")}
                 <IconArrowUpRight width={12} height={12} />
               </a>
             )}
