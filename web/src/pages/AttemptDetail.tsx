@@ -3,7 +3,7 @@ import { createMemo, For, Show } from "solid-js";
 import { Delta } from "~/components/AttemptRow";
 import { IconArrowUpRight } from "~/components/icons";
 import { Empty, WithState } from "~/components/Page";
-import { AttemptBadge, GateIcon } from "~/components/status";
+import { AttemptBadge, GateIcon, TitleChips } from "~/components/status";
 import { buttonVariants } from "~/components/ui/button";
 import { Card, CardHeader, CardTitle } from "~/components/ui/card";
 import { store } from "~/lib/data";
@@ -33,6 +33,7 @@ function Detail(props: { a: Attempt; s: State }) {
               <Show when={props.a.delta != null}>
                 <Delta value={props.a.delta} class="text-sm" />
               </Show>
+              <TitleChips technique={props.a.technique} scope={props.a.scope} />
             </div>
             <h1 class="mt-2 text-2xl font-semibold tracking-tight text-balance">{props.a.title}</h1>
             <p class="mt-2 text-sm text-muted-foreground">

@@ -1,7 +1,75 @@
 {
+  "commands": [
+    {
+      "command": "/claim",
+      "does": "Reserve the idea for a few hours.",
+      "where": "a queued idea",
+      "who": "anyone"
+    },
+    {
+      "command": "/unclaim",
+      "does": "Release the claim.",
+      "where": "the idea",
+      "who": "the claimant"
+    },
+    {
+      "command": "/retry",
+      "does": "Run verification again.",
+      "where": "a pull request",
+      "who": "the author or a leader"
+    },
+    {
+      "command": "/approve <commit>",
+      "does": "Approve exactly that commit.",
+      "where": "a pull request",
+      "who": "reviewers and leaders"
+    },
+    {
+      "command": "/request-changes <reason>",
+      "does": "Block the change until the same reviewer approves.",
+      "where": "a pull request",
+      "who": "reviewers and leaders"
+    },
+    {
+      "command": "/accept",
+      "does": "Put the idea into the queue.",
+      "where": "a proposed idea",
+      "who": "ideators and leaders"
+    },
+    {
+      "command": "/decline",
+      "does": "Close it; give the reason in the same comment.",
+      "where": "a proposed idea or an application",
+      "who": "ideators and leaders"
+    },
+    {
+      "command": "/apply reviewer|ideator|leader",
+      "does": "Open an application for leaders to judge.",
+      "where": "any issue",
+      "who": "anyone with enough merged changes"
+    },
+    {
+      "command": "/endorse",
+      "does": "Support the application.",
+      "where": "an application",
+      "who": "leaders"
+    },
+    {
+      "command": "/grant @login reviewer|ideator",
+      "does": "Give a role directly.",
+      "where": "any issue",
+      "who": "leaders"
+    },
+    {
+      "command": "/revoke @login <role>",
+      "does": "Take a role away.",
+      "where": "any issue",
+      "who": "leaders"
+    }
+  ],
   "deny": [
     {
-      "description": "`sorry` or `admit` (unfinished proofs).",
+      "description": "sorry or admit (unfinished proofs).",
       "mode": "forbid",
       "name": "sorry"
     },
@@ -11,19 +79,24 @@
       "name": "axiom"
     },
     {
-      "description": "`native_decide` and other ways of trusting compiled code instead of the proof kernel.",
+      "description": "native_decide and other ways of trusting compiled code instead of the proof kernel.",
       "mode": "forbid",
       "name": "native evaluation"
     },
     {
-      "description": "`unsafe`, `implemented_by`, `extern`, `opaque` and similar escape hatches.",
+      "description": "unsafe, implemented_by, extern, opaque and similar escape hatches.",
       "mode": "forbid",
       "name": "escape hatches"
     },
     {
-      "description": "Code that runs during compilation (`#eval`, `run_cmd`, `elab`, `initialize`).",
+      "description": "Code that runs during compilation (#eval, run_cmd, elab, initialize).",
       "mode": "forbid",
       "name": "compile-time code"
+    },
+    {
+      "description": "Metaprogramming (MetaM, TacticM, simproc, run_tac, open Lean, IO): proofs are written with existing tactics, not new ones.",
+      "mode": "forbid",
+      "name": "metaprogramming"
     },
     {
       "description": "More macros, syntax or notation than there are today (no private shorthand languages).",
@@ -31,12 +104,12 @@
       "name": "macros and notation"
     },
     {
-      "description": "More `maxHeartbeats` overrides than there are today, or any above 4,000,000.",
+      "description": "More maxHeartbeats overrides than there are today, or any above 4,000,000.",
       "mode": "no_increase",
       "name": "maxHeartbeats"
     },
     {
-      "description": "More raised resource limits (`maxRecDepth`, `synthInstance.maxSize`, `exponentiation.threshold`) than there are today.",
+      "description": "More raised resource limits (maxRecDepth, synthInstance.maxSize, exponentiation.threshold) than there are today.",
       "mode": "no_increase",
       "name": "resource limits"
     }
@@ -54,6 +127,16 @@
   ],
   "gates": [
     {
+      "description": "The title follows `technique(scope): summary` and the description names the idea it implements, so every change can be identified and grouped.",
+      "key": "format",
+      "label": "Standard title and description"
+    },
+    {
+      "description": "One author may have only a limited number of changes in verification at once, so the build queue stays available to everyone.",
+      "key": "quota",
+      "label": "Within the open-change limit"
+    },
+    {
       "description": "The statement of the theorems, the toolchain, the dependency pins and the harness configuration must be byte-identical to the main branch.",
       "key": "frozen",
       "label": "Frozen files untouched"
@@ -64,7 +147,7 @@
       "label": "Changes stay in scope"
     },
     {
-      "description": "No new axioms, no unchecked native evaluation, no escape hatches, no private macro languages, no raised resource limits.",
+      "description": "No new axioms, no unchecked native evaluation, no escape hatches, no code that runs during the build, no private macro languages, no raised resource limits, and no protected declaration removed.",
       "key": "deny",
       "label": "No banned constructs"
     },
@@ -89,7 +172,7 @@
       "label": "Verified on current main"
     },
     {
-      "description": "Approved by someone other than the author.",
+      "description": "Approved by a vetted reviewer other than the author.",
       "key": "review",
       "label": "Independent review"
     }
@@ -132,21 +215,66 @@
       "unit": "s"
     }
   ],
+  "protect": [
+    {
+      "description": "Declarations named after numbered statements of the paper (`thm_*`, `lem_*`, `prop_*`, `cor_*`, `def_*`) may be re-proved but not removed.",
+      "name": "paper statements"
+    }
+  ],
+  "roles": {
+    "bootstrap": true,
+    "endorsements": 1,
+    "ideator_min_merged": 1,
+    "leader_endorsements": 2,
+    "leader_min_merged": 5,
+    "leaders": [
+      "kongeskog"
+    ],
+    "reviewer_min_merged": 2
+  },
   "settings": {
     "Approvals for large changes": 2,
     "Approvals required": 1,
     "Idea claim length (hours)": 3,
     "Large change threshold (files)": 20,
     "Maximum line length": 100,
+    "Minimum account age to apply for a role (days)": 30,
     "Minimum improvement": 25,
-    "Primary metric": "tokens",
-    "Reviewer minimum account age (days)": 30
+    "Open changes per author": 4,
+    "Primary metric": "tokens"
   },
+  "techniques": [
+    {
+      "description": "Remove declarations nothing uses.",
+      "key": "dead-code"
+    },
+    {
+      "description": "Use a lemma or definition from the library instead of a local one.",
+      "key": "library"
+    },
+    {
+      "description": "Merge duplicate or near-duplicate declarations.",
+      "key": "merge"
+    },
+    {
+      "description": "Replace several special cases with one general statement.",
+      "key": "generalize"
+    },
+    {
+      "description": "A shorter proof of the same statement.",
+      "key": "shorten"
+    },
+    {
+      "description": "Reorganize definitions or the argument so that less is needed.",
+      "key": "restructure"
+    }
+  ],
   "theorems": [
     "Solution.mainTheorem",
     "Solution.mainTheoremApprox",
     "Solution.separation",
     "Solution.separationClosure",
     "Solution.permanent_over_real"
-  ]
+  ],
+  "title_format": "<technique>(<scope>): <summary> where technique is one of dead-code, library, merge, generalize, shorten, restructure; scope is the file or folder under the project directory without .lean (for example Paper/Tree), or * for many; and the summary is 10 to 90 characters"
 }

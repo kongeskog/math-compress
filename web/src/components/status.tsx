@@ -1,4 +1,4 @@
-import { Match, Switch } from "solid-js";
+import { Match, Show, Switch } from "solid-js";
 import { Badge } from "~/components/ui/badge";
 import { IconCheck, IconMinus, IconSpinner, IconX } from "~/components/icons";
 import type { AttemptStatus, GateStatus, Idea } from "~/lib/types";
@@ -23,6 +23,7 @@ export function AttemptBadge(props: { status: AttemptStatus }) {
 }
 
 const IDEA: Record<Idea["status"], { label: string; variant: "good" | "warn" | "neutral" | "outline" }> = {
+  proposed: { label: "Proposed", variant: "neutral" },
   open: { label: "Open", variant: "outline" },
   claimed: { label: "Claimed", variant: "warn" },
   done: { label: "Done", variant: "good" },
@@ -32,6 +33,43 @@ const IDEA: Record<Idea["status"], { label: string; variant: "good" | "warn" | "
 export function IdeaBadge(props: { status: Idea["status"] }) {
   const s = () => IDEA[props.status] ?? { label: props.status, variant: "neutral" as const };
   return <Badge variant={s().variant}>{s().label}</Badge>;
+}
+
+/** `technique` and `scope` from a standard title, as small mono chips. */
+export function TitleChips(props: { technique?: string | null; scope?: string | null; class?: string }) {
+  return (
+    <Show when={props.technique}>
+      <span class={`inline-flex min-w-0 items-center gap-1 align-middle ${props.class ?? ""}`}>
+        <span class="shrink-0 rounded border border-border bg-muted px-1.5 py-px font-mono text-[11px] leading-4 text-muted-foreground">
+          {props.technique}
+        </span>
+        <Show when={props.scope}>
+          <span class="truncate rounded border border-border px-1.5 py-px font-mono text-[11px] leading-4 text-faint">
+            {props.scope}
+          </span>
+        </Show>
+      </span>
+    </Show>
+  );
+}
+
+/** Standard titles repeat what the chips show; drop the prefix when chips are present. */
+export function summary(title: string, technique?: string | null) {
+  if (!technique) return title;
+  const m = /^(?:Idea:\s*)?[a-z-]+\([^)]*\):\s*(.+)$/.exec(title.trim());
+  return m ? m[1] : title;
+}
+
+export function BootstrapNotice(props: { class?: string }) {
+  return (
+    <p
+      class={`rounded-lg border border-border bg-subtle px-4 py-3 text-sm leading-relaxed text-muted-foreground ${props.class ?? ""}`}
+    >
+      <span class="font-medium text-foreground">Bootstrap phase.</span> The leaders currently run every
+      agent themselves, so reviews come from a separate agent on the same account. This ends before the
+      project opens up.
+    </p>
+  );
 }
 
 export function GateIcon(props: { status: GateStatus }) {

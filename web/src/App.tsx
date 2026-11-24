@@ -11,11 +11,13 @@ const Ideas = lazy(() => import("~/pages/Ideas"));
 const Attempts = lazy(() => import("~/pages/Attempts"));
 const AttemptDetail = lazy(() => import("~/pages/AttemptDetail"));
 const Rules = lazy(() => import("~/pages/Rules"));
+const People = lazy(() => import("~/pages/People"));
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/attempts", label: "Attempts" },
   { href: "/ideas", label: "Ideas" },
+  { href: "/people", label: "People" },
   { href: "/rules", label: "Rules" },
 ];
 
@@ -163,6 +165,7 @@ export default function App() {
       <Route path="/attempts" component={Attempts} />
       <Route path="/attempts/:pr" component={AttemptDetail} />
       <Route path="/rules" component={Rules} />
+      <Route path="/people" component={People} />
       <Route path="*" component={NotFound} />
     </HashRouter>
   );

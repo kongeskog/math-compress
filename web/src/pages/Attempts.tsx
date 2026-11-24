@@ -17,12 +17,33 @@ export default function Attempts() {
           ? a.status !== "merged" && a.status !== "rejected"
           : a.status === f,
     );
-  const rows = createMemo(() => match(filter()));
+  const [technique, setTechnique] = createSignal("");
+  const techniques = createMemo(() => {
+    const seen = new Set<string>();
+    for (const t of store.rules()?.techniques ?? []) seen.add(t.key);
+    for (const a of store.all()) if (a.technique) seen.add(a.technique);
+    return [...seen];
+  });
+  const rows = createMemo(() =>
+    match(filter()).filter((a) => !technique() || a.technique === technique()),
+  );
   return (
     <Page
       title="Attempts"
       subtitle="Every pull request, kept or not. Rejected attempts stay on the record so nobody repeats them."
       actions={
+        <>
+        <Show when={techniques().length}>
+          <select
+            aria-label="Filter by technique"
+            class="h-8 rounded-md border border-border bg-background px-2 text-sm text-foreground"
+            value={technique()}
+            onChange={(e) => setTechnique(e.currentTarget.value)}
+          >
+            <option value="">All techniques</option>
+            <For each={techniques()}>{(t) => <option value={t}>{t}</option>}</For>
+          </select>
+        </Show>
         <Segmented
           label="Filter attempts"
           value={filter()}
@@ -34,6 +55,7 @@ export default function Attempts() {
             { value: "rejected", label: `Rejected ${match("rejected").length}` },
           ]}
         />
+        </>
       }
     >
       <WithState>

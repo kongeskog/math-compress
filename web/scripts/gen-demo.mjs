@@ -22,18 +22,25 @@ const files = [
   "Nc/Dl/SizeDeal.lean", "Paper/Identity.lean", "Paper/Flat.lean", "Paper/Gauges.lean", "NS1/Lists.lean",
   "Nc/G/PlayThm.lean", "Nc/Tow/Load0.lean", "NS1/Comp.lean", "Nc/Hc/Segments.lean", "Nc/Grp/GroupProg.lean",
 ];
+const scopeOf = (f) => f.replace(/\.lean$/, "");
 const techniques = [
-  (f) => `Remove unused lemmas from ${f}`,
-  (f) => `Replace manual rewrite chains with simp in ${f}`,
-  (f) => `Merge duplicate helper lemmas in ${f}`,
-  (f) => `Use Mathlib lemma instead of local copy in ${f}`,
-  (f) => `Collapse case splits with omega in ${f}`,
-  (f) => `Inline single-use definitions in ${f}`,
-  (f) => `Shorten induction with a generalized statement in ${f}`,
-  (f) => `Drop redundant hypotheses in ${f}`,
-  (f) => `Factor the shared bound out of ${f}`,
-  (f) => `Golf term-mode proofs in ${f}`,
+  ["dead-code", (f) => `remove unused lemmas from ${f}`],
+  ["shorten", (f) => `replace manual rewrite chains with simp in ${f}`],
+  ["merge", (f) => `merge duplicate helper lemmas in ${f}`],
+  ["library", (f) => `use the Mathlib lemma instead of the local copy in ${f}`],
+  ["shorten", (f) => `collapse case splits with omega in ${f}`],
+  ["restructure", (f) => `inline single-use definitions in ${f}`],
+  ["generalize", (f) => `one generalized induction statement in ${f}`],
+  ["shorten", (f) => `drop redundant hypotheses in ${f}`],
+  ["restructure", (f) => `factor the shared bound out of ${f}`],
+  ["shorten", (f) => `shorter term-mode proofs in ${f}`],
 ];
+/** A standard title plus its parsed parts. */
+const titled = (file) => {
+  const [technique, text] = pick(techniques);
+  const scope = scopeOf(file);
+  return { title: `${technique}(${scope}): ${text(file.split("/").pop().replace(/\.lean$/, ""))}`, technique, scope };
+};
 const rejectReasons = [
   ["improves", "No improvement: tokens did not drop by the minimum of 25"],
   ["build", "lake build failed"],
@@ -45,6 +52,7 @@ const rejectReasons = [
   ["review", "Changes requested: proof obfuscated to save tokens"],
 ];
 const GATES = [
+  ["format", "Standard title and description"],
   ["frozen", "Frozen files unchanged"],
   ["scope", "Changes stay inside the project"],
   ["deny", "No banned constructs"],
@@ -93,25 +101,27 @@ const bump = (login, merged, saved) => {
 
 const ideas = [];
 const ideaTitles = [
-  "Delete declarations unreachable from Solution.lean",
-  "Replace blanket `import Mathlib` with narrow imports where it shortens `open` lines",
-  "Unify the three copies of Computes behind one definition",
-  "Remove the toNc / ofNc bridge by proving directly against Statement",
-  "Paper/Tree.lean: generalize the subtree bound lemmas",
-  "Nc/Tow: Load0 and Load2 share most of their case analysis",
-  "Use `gcongr` for the monotonicity blocks in Paper/Rate.lean",
-  "NS1/Lists.lean duplicates List lemmas already in Mathlib",
-  "Collapse the 16 maxHeartbeats proofs into smaller lemmas",
-  "Paper/Groups.lean: replace explicit coset arithmetic with `group`",
-  "Shorten Paper/Fan.lean with a single strong induction",
-  "Turn repeated `have` chains in Nc/G/Move.lean into one `calc`",
-  "Paper/Identity.lean: the `entries` macro can be a simp set",
-  "Nc/Grp: GroupProg and GrpTime prove the same bound twice",
+  ["dead-code", "*", "delete declarations unreachable from Solution"],
+  ["restructure", "*", "narrow imports where it shortens the open lines"],
+  ["merge", "Nc", "unify the three copies of Computes behind one definition"],
+  ["restructure", "Solution", "prove directly against Statement, dropping toNc and ofNc"],
+  ["generalize", "Paper/Tree", "generalize the subtree bound lemmas"],
+  ["merge", "Nc/Tow", "Load0 and Load2 share most of their case analysis"],
+  ["shorten", "Paper/Rate", "use gcongr for the monotonicity blocks"],
+  ["library", "NS1/Lists", "List lemmas that already exist in Mathlib"],
+  ["restructure", "*", "split the 16 maxHeartbeats proofs into smaller lemmas"],
+  ["shorten", "Paper/Groups", "replace explicit coset arithmetic with group"],
+  ["shorten", "Paper/Fan", "a single strong induction"],
+  ["shorten", "Nc/G/Move", "turn repeated have chains into one calc"],
+  ["restructure", "Paper/Identity", "the entries macro can be a simp set"],
+  ["merge", "Nc/Grp", "GroupProg and GrpTime prove the same bound twice"],
 ];
-ideaTitles.forEach((title, k) => {
+ideaTitles.forEach(([technique, scope, text], k) => {
   ideas.push({
     number: 100 + k,
-    title,
+    title: `Idea: ${technique}(${scope}): ${text}`,
+    technique,
+    scope,
     status: "open",
     author: pick(authors),
     claimed_by: null,
@@ -134,7 +144,7 @@ for (let k = 0; k < N; k++) {
   const baseSha = curSha;
   const a = {
     pr: number,
-    title: pick(techniques)(file),
+    ...titled(file),
     author,
     head_sha: hex(),
     base_sha: baseSha,
@@ -218,7 +228,7 @@ openSpecs.forEach((spec, k) => {
   const hasMetrics = spec.saved != null;
   const a = {
     pr: number,
-    title: pick(techniques)(pick(files)),
+    ...titled(pick(files)),
     author,
     head_sha: hex(),
     base_sha: curSha,
@@ -249,6 +259,9 @@ if (stillOpen[0]) {
 }
 if (stillOpen[1]) Object.assign(stillOpen[1], { status: "claimed", claimed_by: pick(authors), lease_expires: new Date(now + 22 * 60_000).toISOString() });
 if (stillOpen[2]) Object.assign(stillOpen[2], { status: "closed" });
+// Two ideas from newcomers, waiting for triage.
+if (stillOpen[3]) Object.assign(stillOpen[3], { status: "proposed", author: "first-timer" });
+if (stillOpen[4]) Object.assign(stillOpen[4], { status: "proposed", author: "curious-cat" });
 
 const metricDefs = [
   { key: "tokens", label: "Tokens", unit: "tokens", description: "Lean source tokens after stripping comments and whitespace. Lower is better." },
@@ -291,6 +304,45 @@ const state = {
   top_files: files.map((path, k) => ({ path, tokens: topTokens[k], loc: Math.round(topTokens[k] / 13) })),
 };
 
+const iso = (hoursAgo) => new Date(now - hoursAgo * HOUR).toISOString();
+const roles = {
+  bootstrap: true,
+  members: [
+    { login: "kongeskog", role: "leader", since: iso(120), by: [] },
+    { login: "mira-k", role: "leader", since: iso(30), by: ["kongeskog"] },
+    { login: "ana-rios", role: "reviewer", since: iso(70), by: ["kongeskog"] },
+    { login: "okabe-r", role: "reviewer", since: iso(41), by: ["kongeskog", "mira-k"] },
+    { login: "jdvries", role: "reviewer", since: iso(12), by: ["mira-k"] },
+    { login: "lean-otter", role: "ideator", since: iso(55), by: ["kongeskog"] },
+  ],
+  applications: [
+    {
+      issue: 131,
+      login: "qfwd",
+      role: "reviewer",
+      opened_at: iso(3),
+      status: "open",
+      endorsements: [],
+      needed: 1,
+      merged: 2,
+      saved: 2432,
+      url: `https://github.com/${REPO}/issues/131`,
+    },
+    {
+      issue: 118,
+      login: "tobiasz",
+      role: "ideator",
+      opened_at: iso(40),
+      status: "granted",
+      endorsements: ["kongeskog"],
+      needed: 1,
+      merged: 1,
+      saved: 1330,
+      url: `https://github.com/${REPO}/issues/118`,
+    },
+  ],
+};
+writeFileSync(join(out, "roles.json"), JSON.stringify(roles, null, 2) + "\n");
 writeFileSync(join(out, "state.json"), JSON.stringify(state, null, 2) + "\n");
 writeFileSync(join(out, "attempts.jsonl"), attempts.map((a) => JSON.stringify(a)).join("\n") + "\n");
 console.log(

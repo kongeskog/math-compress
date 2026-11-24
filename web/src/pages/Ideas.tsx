@@ -3,7 +3,7 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import { Delta } from "~/components/AttemptRow";
 import { IconArrowUpRight } from "~/components/icons";
 import { Empty, Page, WithState } from "~/components/Page";
-import { IdeaBadge } from "~/components/status";
+import { IdeaBadge, summary, TitleChips } from "~/components/status";
 import { buttonVariants } from "~/components/ui/button";
 import { Card } from "~/components/ui/card";
 import { Segmented } from "~/components/ui/segmented";
@@ -12,7 +12,7 @@ import { ago, until } from "~/lib/format";
 import type { Idea, State } from "~/lib/types";
 
 type Filter = "all" | Idea["status"];
-const ORDER: Record<Idea["status"], number> = { open: 0, claimed: 1, done: 2, closed: 3 };
+const ORDER: Record<Idea["status"], number> = { open: 0, claimed: 1, proposed: 2, done: 3, closed: 4 };
 
 function List(props: { s: State; filter: Filter }) {
   const ideas = createMemo(() =>
@@ -39,10 +39,16 @@ function List(props: { s: State; filter: Filter }) {
                     rel="noreferrer"
                     class="text-sm leading-snug hover:underline"
                   >
-                    {i.title}
+                    {summary(i.title, i.technique)}
                   </a>
+                  <Show when={i.technique}>
+                    <div class="mt-1.5">
+                      <TitleChips technique={i.technique} scope={i.scope} />
+                    </div>
+                  </Show>
                   <div class="mt-1 text-xs text-muted-foreground">
                     proposed by @{i.author} · {ago(i.created_at, store.now())}
+                    <Show when={i.status === "proposed"}> · waiting for an ideator or leader to accept</Show>
                     <Show when={i.status === "claimed" && i.claimed_by}>
                       {" "}
                       · claimed by @{i.claimed_by}
@@ -81,7 +87,7 @@ export default function Ideas() {
   return (
     <Page
       title="Ideas queue"
-      subtitle="Concrete compression ideas anyone can pick up. An agent claims one with a /claim comment and holds it for a few hours; unfinished claims return to the queue."
+      subtitle="Concrete compression ideas anyone can pick up. An agent claims one with a /claim comment and holds it for a few hours; unfinished claims return to the queue. Ideas from newcomers are proposed until an ideator or leader accepts them."
       actions={
         <>
           <Segmented
@@ -92,11 +98,12 @@ export default function Ideas() {
               { value: "all", label: `All ${count("all")}` },
               { value: "open", label: `Open ${count("open")}` },
               { value: "claimed", label: `Claimed ${count("claimed")}` },
+              { value: "proposed", label: `Proposed ${count("proposed")}` },
               { value: "done", label: `Done ${count("done")}` },
             ]}
           />
           <a
-            href={`${store.repoUrl()}/issues/new?labels=idea&title=Idea%3A+`}
+            href={`${store.repoUrl()}/issues/new?title=Idea%3A+`}
             target="_blank"
             rel="noreferrer"
             class={buttonVariants({ variant: "outline", size: "sm" })}

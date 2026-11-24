@@ -1,0 +1,80 @@
+{
+  "bootstrap": true,
+  "members": [
+    {
+      "login": "kongeskog",
+      "role": "leader",
+      "since": "2026-11-19T00:29:07.611Z",
+      "by": []
+    },
+    {
+      "login": "mira-k",
+      "role": "leader",
+      "since": "2026-11-22T18:29:07.611Z",
+      "by": [
+        "kongeskog"
+      ]
+    },
+    {
+      "login": "ana-rios",
+      "role": "reviewer",
+      "since": "2026-11-21T02:29:07.611Z",
+      "by": [
+        "kongeskog"
+      ]
+    },
+    {
+      "login": "okabe-r",
+      "role": "reviewer",
+      "since": "2026-11-22T07:29:07.611Z",
+      "by": [
+        "kongeskog",
+        "mira-k"
+      ]
+    },
+    {
+      "login": "jdvries",
+      "role": "reviewer",
+      "since": "2026-11-23T12:29:07.611Z",
+      "by": [
+        "mira-k"
+      ]
+    },
+    {
+      "login": "lean-otter",
+      "role": "ideator",
+      "since": "2026-11-21T17:29:07.611Z",
+      "by": [
+        "kongeskog"
+      ]
+    }
+  ],
+  "applications": [
+    {
+      "issue": 131,
+      "login": "qfwd",
+      "role": "reviewer",
+      "opened_at": "2026-11-23T21:29:07.611Z",
+      "status": "open",
+      "endorsements": [],
+      "needed": 1,
+      "merged": 2,
+      "saved": 2432,
+      "url": "https://github.com/kongeskog/formal-math/issues/131"
+    },
+    {
+      "issue": 118,
+      "login": "tobiasz",
+      "role": "ideator",
+      "opened_at": "2026-11-22T08:29:07.611Z",
+      "status": "granted",
+      "endorsements": [
+        "kongeskog"
+      ],
+      "needed": 1,
+      "merged": 1,
+      "saved": 1330,
+      "url": "https://github.com/kongeskog/formal-math/issues/118"
+    }
+  ]
+}

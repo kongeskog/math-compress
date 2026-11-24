@@ -1,5 +1,5 @@
 import { createMemo, createRoot, createSignal } from "solid-js";
-import type { Attempt, Config, PromptRole, Rules, State } from "./types";
+import type { Attempt, Config, PromptRole, RolesState, Rules, State } from "./types";
 
 const POLL_MS = 60_000;
 
@@ -50,6 +50,7 @@ export const store = createRoot(() => {
   const [decided, setDecided] = createSignal<Attempt[]>([]);
   const [livePulls, setLivePulls] = createSignal<GhPull[]>([]);
   const [rules, setRules] = createSignal<Rules>();
+  const [roles, setRoles] = createSignal<RolesState>();
   const [prompts, setPrompts] = createSignal<Partial<Record<PromptRole, string>>>({});
   const [fetchedAt, setFetchedAt] = createSignal<number>();
   const [error, setError] = createSignal<string>();
@@ -64,11 +65,14 @@ export const store = createRoot(() => {
     if (!c) return;
     const base = c.dataUrl.replace(/\/$/, "");
     try {
-      const [s, a] = await Promise.all([
+      const [s, a, r] = await Promise.all([
         getJson<State>(`${base}/state.json`),
         getText(`${base}/attempts.jsonl`).catch(() => ""),
+        // Older data branches have no roles file.
+        getJson<RolesState>(`${base}/roles.json`).catch(() => undefined),
       ]);
       setState(s);
+      if (r) setRoles({ bootstrap: !!r.bootstrap, members: r.members ?? [], applications: r.applications ?? [] });
       setDecided(
         parseJsonl<Attempt>(a).sort(
           (x, y) =>
@@ -158,6 +162,9 @@ export const store = createRoot(() => {
 
   const find = (pr: number) => all().find((a) => a.pr === pr);
 
+  /** True while the leaders run every agent themselves. */
+  const bootstrap = () => roles()?.bootstrap ?? rules()?.roles?.bootstrap ?? false;
+
   const repoUrl = () => (config() ? `https://github.com/${config()!.repo}` : "#");
 
   return {
@@ -168,6 +175,8 @@ export const store = createRoot(() => {
     all,
     find,
     rules,
+    roles,
+    bootstrap,
     prompts,
     fetchedAt,
     error,

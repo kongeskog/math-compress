@@ -47,6 +47,35 @@ export default function Rules() {
                 </ol>
               </Card>
 
+              <Show when={rules().title_format || rules().techniques?.length}>
+                <Card class="overflow-hidden">
+                  <CardHeader>
+                    <CardTitle>Title format</CardTitle>
+                    <span class="text-xs text-faint">pull requests and ideas</span>
+                  </CardHeader>
+                  <div class="border-b border-border px-5 py-4">
+                    <code class="font-mono text-[13px]">{"<technique>(<scope>): <summary>"}</code>
+                    <p class="mt-2 text-sm leading-relaxed text-muted-foreground">{rules().title_format}</p>
+                    <p class="mt-2 text-sm leading-relaxed text-muted-foreground">
+                      Ideas put <code class="font-mono text-[13px] text-foreground">Idea: </code> in front. A
+                      pull request names its idea with a line{" "}
+                      <code class="font-mono text-[13px] text-foreground">Idea: #12</code> or{" "}
+                      <code class="font-mono text-[13px] text-foreground">Idea: none</code>.
+                    </p>
+                  </div>
+                  <ul class="divide-y divide-border">
+                    <For each={rules().techniques ?? []}>
+                      {(t) => (
+                        <li class="flex flex-col gap-1 px-5 py-3 sm:flex-row sm:items-baseline sm:gap-4">
+                          <code class="w-44 shrink-0 font-mono text-[13px]">{t.key}</code>
+                          <span class="flex-1 text-sm text-muted-foreground">{t.description}</span>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Card>
+              </Show>
+
               <Card class="overflow-hidden">
                 <CardHeader>
                   <CardTitle>Banned constructs</CardTitle>
@@ -67,6 +96,51 @@ export default function Rules() {
                   </ul>
                 </Show>
               </Card>
+
+              <Show when={rules().protect?.length}>
+                <Card class="overflow-hidden">
+                  <CardHeader>
+                    <CardTitle>Protected declarations</CardTitle>
+                    <span class="text-xs text-faint">may be re-proved, not removed</span>
+                  </CardHeader>
+                  <ul class="divide-y divide-border">
+                    <For each={rules().protect}>
+                      {(p) => (
+                        <li class="flex flex-col gap-1 px-5 py-3 sm:flex-row sm:items-baseline sm:gap-4">
+                          <code class="w-44 shrink-0 font-mono text-[13px]">{p.name}</code>
+                          <span class="flex-1 text-sm text-muted-foreground">
+                            {p.description.replaceAll("`", "")}
+                          </span>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Card>
+              </Show>
+
+              <Show when={rules().commands?.length}>
+                <Card class="overflow-hidden">
+                  <CardHeader>
+                    <CardTitle>Commands</CardTitle>
+                    <span class="text-xs text-faint">written as a comment</span>
+                  </CardHeader>
+                  <ul class="divide-y divide-border">
+                    <For each={rules().commands}>
+                      {(c) => (
+                        <li class="px-5 py-3">
+                          <div class="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-4">
+                            <code class="font-mono text-[13px] sm:w-64 sm:shrink-0">{c.command}</code>
+                            <span class="flex-1 text-sm text-muted-foreground">{c.does}</span>
+                          </div>
+                          <div class="mt-1 text-xs text-faint">
+                            {c.who} · on {c.where}
+                          </div>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Card>
+              </Show>
             </div>
 
             <div class="flex flex-col gap-6 lg:col-span-2">

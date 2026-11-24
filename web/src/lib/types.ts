@@ -35,11 +35,13 @@ export type Attempt = {
   run_url?: string | null;
   merge_sha?: string | null;
   reason?: string | null;
+  technique?: string | null;
+  scope?: string | null;
 };
 export type Idea = {
   number: number;
   title: string;
-  status: "open" | "claimed" | "done" | "closed";
+  status: "proposed" | "open" | "claimed" | "done" | "closed";
   author: string;
   claimed_by?: string | null;
   lease_expires?: string | null;
@@ -47,6 +49,32 @@ export type Idea = {
   result_delta?: number | null;
   created_at: string;
   url: string;
+  technique?: string | null;
+  scope?: string | null;
+};
+export type Role = "leader" | "reviewer" | "ideator";
+export type Member = { login: string; role: Role; since: string; by: string[] };
+export type Application = {
+  issue: number;
+  login: string;
+  role: Role;
+  opened_at: string;
+  status: "open" | "granted" | "declined";
+  endorsements: string[];
+  needed: number;
+  merged: number;
+  saved: number;
+  url: string;
+};
+export type RolesState = { bootstrap: boolean; members: Member[]; applications: Application[] };
+export type RoleRules = {
+  bootstrap: boolean;
+  leaders: string[];
+  reviewer_min_merged: number;
+  ideator_min_merged: number;
+  leader_min_merged: number;
+  endorsements: number;
+  leader_endorsements: number;
 };
 export type MetricDef = { key: MetricKey; label: string; unit: string; description: string };
 export type State = {
@@ -76,5 +104,10 @@ export type Rules = {
   frozen: string[];
   deny: { name: string; mode: string; description: string }[];
   settings: Record<string, string | number>;
+  protect?: { name: string; description: string }[];
+  techniques?: { key: string; description: string }[];
+  title_format?: string;
+  roles?: RoleRules;
+  commands?: { command: string; who: string; where: string; does: string }[];
 };
 export type PromptRole = "contributor" | "reviewer" | "ideator";

@@ -1,6 +1,6 @@
 import { A } from "@solidjs/router";
 import { Show } from "solid-js";
-import { AttemptBadge } from "~/components/status";
+import { AttemptBadge, summary, TitleChips } from "~/components/status";
 import { store } from "~/lib/data";
 import { ago, signed } from "~/lib/format";
 import type { Attempt } from "~/lib/types";
@@ -29,7 +29,10 @@ export function AttemptRow(props: { a: Attempt; dense?: boolean }) {
     >
       <span class="w-11 shrink-0 font-mono text-xs text-faint tnum">#{props.a.pr}</span>
       <div class="min-w-0 flex-1">
-        <div class="truncate text-sm">{props.a.title}</div>
+        <div class="flex min-w-0 items-center gap-2 text-sm">
+          <TitleChips technique={props.a.technique} scope={props.a.scope} class="hidden shrink-0 sm:inline-flex" />
+          <span class="truncate">{summary(props.a.title, props.a.technique)}</span>
+        </div>
         <div class="mt-0.5 truncate text-xs text-muted-foreground">
           @{props.a.author} · {ago(props.a.decided_at ?? props.a.created_at, store.now())}
           <Show when={props.a.status === "rejected" && props.a.reason}>
