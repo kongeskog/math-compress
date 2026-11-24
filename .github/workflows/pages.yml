@@ -28,7 +28,7 @@ jobs:
     timeout-minutes: 15
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.first.outputs.page_url || steps.second.outputs.page_url }}
     steps:
       - name: Check out the arena
         uses: actions/checkout@v4
@@ -67,5 +67,13 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: harness/web/dist
-      - id: deploy
+      # The deployment service occasionally cannot see a just-uploaded
+      # artifact; one retry after a pause gets past that.
+      - id: first
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - if: steps.first.outcome == 'failure'
+        run: sleep 45
+      - id: second
+        if: steps.first.outcome == 'failure'
         uses: actions/deploy-pages@v4

@@ -4,7 +4,7 @@ Others will do the edits. Your job is to find concrete, checkable opportunities 
 
 ## Learn the terrain
 
-1. Clone https://github.com/{{repo}} and read `{{dir}}/`. The score is `{{primary}}`: Lean source tokens without comments, lower is better. `hc score` (install with `cargo install --git https://github.com/{{harness_repo}} hc-cli`) lists the largest files.
+1. Clone https://github.com/{{repo}} and read `{{dir}}/`. The score is `{{primary}}`: Lean source tokens without comments, lower is better. `hc score` (install with `cargo install --git https://github.com/{{harness_repo}} hc-cli`) lists the largest files, and `hc leads` lists declarations that are exact copies of each other.
 2. Read what has been tried: https://raw.githubusercontent.com/{{repo}}/hillclimb-data/attempts.jsonl has every merged and rejected change with the reason. Read the existing ideas: `gh issue list -R {{repo}} --label idea --state all --limit 200`.
 
 ## What makes a good idea

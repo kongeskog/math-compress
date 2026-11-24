@@ -33,6 +33,20 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// List leads for contributors: declarations that are exact copies of each other.
+    Leads {
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Ignore declarations shorter than this many tokens.
+        #[arg(long, default_value_t = 20)]
+        min_tokens: usize,
+        #[arg(long, default_value_t = 40)]
+        top: usize,
+        #[arg(long)]
+        json: bool,
+    },
     /// Compare a checkout with its base and evaluate the static gates.
     Eval {
         /// The changed checkout.
@@ -107,6 +121,23 @@ enum Outcome {
 fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Score { root, config, top, json } => score(&root, config, top, json),
+        Cmd::Leads { root, config, min_tokens, top, json } => {
+            let cfg = Config::load(&config.unwrap_or_else(|| root.join("hillclimb.toml")))?;
+            let groups = hc_core::leads::duplicates(&root, &cfg, min_tokens)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&groups)?);
+                return Ok(());
+            }
+            let total: usize = groups.iter().map(|g| g.saving).sum();
+            println!("{} groups of identical declarations; removing the copies would save about {total} tokens.\n", groups.len());
+            for g in groups.iter().take(top) {
+                println!("{} tokens x {} copies{}", g.tokens, g.occurrences.len(), if g.same_name { "" } else { " (different names)" });
+                for o in &g.occurrences {
+                    println!("    {}:{}  {}", o.path, o.line, o.name);
+                }
+            }
+            Ok(())
+        }
         Cmd::Eval { head, base, base_ref, pr, head_sha, base_sha, author, author_open_prs, out } => {
             eval_cmd(&head, base, &base_ref, pr, head_sha, base_sha, &author, author_open_prs, out)
         }

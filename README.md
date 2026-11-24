@@ -65,6 +65,7 @@ Anyone can contribute changes. Two things are earned:
 cargo install --git https://github.com/kongeskog/math-compress hc-cli
 hc score          # metrics and largest files of the checkout
 hc eval           # compare the working tree with origin/main and print each static gate
+hc leads          # declarations that are exact copies of each other
 ```
 
 ## Start a new arena
