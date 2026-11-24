@@ -171,6 +171,35 @@ impl Forge for GhForge {
         Ok(out)
     }
 
+    fn merged_prs(&mut self) -> Result<Vec<(PullRequest, String, DateTime<Utc>)>> {
+        let recent = self.get("pulls?state=closed&sort=updated&direction=desc&per_page=40")?;
+        let mut out = Vec::new();
+        for p in recent.as_array().into_iter().flatten() {
+            if p["merged_at"].is_null() {
+                continue;
+            }
+            out.push((
+                PullRequest {
+                    number: p["number"].as_u64().unwrap_or(0),
+                    title: s(p, "title"),
+                    author: s(&p["user"], "login"),
+                    body: s(p, "body"),
+                    head_sha: s(&p["head"], "sha"),
+                    base_ref: s(&p["base"], "ref"),
+                    created_at: time(p, "created_at"),
+                    url: s(p, "html_url"),
+                    draft: false,
+                    mergeable: None,
+                    labels: Vec::new(),
+                },
+                s(p, "merge_commit_sha"),
+                time(p, "merged_at"),
+            ));
+        }
+        out.sort_by_key(|x| x.2);
+        Ok(out)
+    }
+
     fn verify_results(&mut self, pr: u64, head_sha: &str) -> Result<Vec<VerifyResult>> {
         let mut out = Vec::new();
         let name = format!("hillclimb-result-{pr}-{head_sha}");

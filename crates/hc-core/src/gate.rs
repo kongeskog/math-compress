@@ -91,6 +91,8 @@ pub trait Forge {
     /// verified. `None` when there is no such build yet.
     fn main_verifies(&mut self, main: &str) -> Result<Option<bool>>;
     fn open_prs(&mut self) -> Result<Vec<PullRequest>>;
+    /// Recently merged pull requests with their merge commit and time.
+    fn merged_prs(&mut self) -> Result<Vec<(PullRequest, String, DateTime<Utc>)>>;
     /// Results for this head produced by the trusted verify workflow, newest first.
     fn verify_results(&mut self, pr: u64, head_sha: &str) -> Result<Vec<VerifyResult>>;
     /// Pull requests that have a verify run queued or in progress.
@@ -207,6 +209,30 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         prs.retain(|p| p.base_ref == self.cfg.project.branch && !p.draft);
         prs.sort_by_key(|p| p.number);
         let mut issues = self.forge.issues()?;
+
+        // A pass can be interrupted between merging and saving. Any merged
+        // pull request missing from the log is recorded now, so the history
+        // never loses a merge.
+        for (pr, merge_sha, merged_at) in self.forge.merged_prs()? {
+            if pr.base_ref != self.cfg.project.branch
+                || past.iter().any(|a| a.pr == pr.number && a.status == AttemptStatus::Merged)
+            {
+                continue;
+            }
+            let results = self.forge.verify_results(pr.number, &pr.head_sha)?;
+            let result = results.iter().find(|r| r.gates.iter().all(|g| g.status == GateStatus::Pass));
+            let mut attempt = self.attempt(&pr, result);
+            if let Some((technique, scope, _)) = self.cfg.format.parse_title(&pr.title) {
+                attempt.technique = Some(technique);
+                attempt.scope = Some(scope);
+            }
+            attempt.gates = result.map(|r| r.gates.clone()).unwrap_or_default();
+            attempt.status = AttemptStatus::Merged;
+            attempt.decided_at = Some(merged_at);
+            attempt.merge_sha = Some(merge_sha);
+            out.log.push(format!("#{}: merge recovered into the log", pr.number));
+            out.decided.push(attempt);
+        }
 
         // Commands first, so a role granted in this pass already counts below.
         self.commands(ledger, roles, &prs, &mut issues, past, &active, &mut out.log)?;
@@ -1094,6 +1120,7 @@ mod tests {
         prs: Vec<PullRequest>,
         results: BTreeMap<String, VerifyResult>,
         extra_results: Vec<VerifyResult>,
+        already_merged: Vec<(PullRequest, String, DateTime<Utc>)>,
         main_ok: Option<bool>,
         stacks: Vec<Vec<u64>>,
         reviews: BTreeMap<u64, Vec<ReviewInfo>>,
@@ -1123,6 +1150,9 @@ mod tests {
         }
         fn main_verifies(&mut self, _: &str) -> Result<Option<bool>> {
             Ok(self.main_ok)
+        }
+        fn merged_prs(&mut self) -> Result<Vec<(PullRequest, String, DateTime<Utc>)>> {
+            Ok(self.already_merged.clone())
         }
         fn verify_results(&mut self, pr: u64, head: &str) -> Result<Vec<VerifyResult>> {
             let mut all: Vec<VerifyResult> =
@@ -1605,6 +1635,19 @@ mod tests {
         m.main_ok = Some(true);
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.merged, [1]);
+    }
+
+    #[test]
+    fn a_merge_missing_from_the_log_is_recovered_once() {
+        let mut m = base();
+        m.already_merged.push((pr(5, "alice"), "merge5".into(), t(-2)));
+        m.results.insert(key(5, &head(5)), result(5, "older", 900, true));
+        let out = run(&mut m, &mut Ledger::default(), &[]);
+        assert_eq!(out.decided.len(), 1);
+        assert_eq!(out.decided[0].status, AttemptStatus::Merged);
+        assert_eq!(out.decided[0].delta, Some(-100));
+        let again = run(&mut m, &mut Ledger::default(), &out.decided);
+        assert!(again.decided.is_empty());
     }
 
     fn idea(n: u64, author: &str, labels: &[&str]) -> IssueInfo {
