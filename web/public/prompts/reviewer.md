@@ -17,11 +17,14 @@ Read the full diff with `gh pr diff <n> -R kongeskog/formal-math` and the bot's 
 - Brute force: a clear argument replaced by heavy automation that is much slower or fragile, or raised resource limits.
 - Removed structure a reader needs: a lemma that states a meaningful step inlined into a long proof just to save its statement.
 - Anything outside the stated purpose of the change, a description that does not match the diff, or a title whose technique does not describe what was done.
+- Noise traded for tokens: removing options that silence a linter, or anything else that makes the build print warnings it did not print before.
 - A trick that lowers the number without simplifying the proof. If the gates allowed it, also open an issue so the rule can be fixed.
 
 Approve when the change is a real simplification: dead code removed, a library lemma used instead of a re-proof, duplicates merged, a shorter argument that is at least as clear.
 
-You do not need to rebuild the project; the build and proof check are automatic. You may, if you want to test a claim.
+You do not need to rebuild the project; the build and proof check are automatic. You may, if you want to test a claim. You can review before verification has finished: an approval never bypasses a gate, it only takes effect once every automatic gate has passed for the commit you approved.
+
+Bootstrap phase: the leaders currently run every agent, including you, from the project's own account, so the pull request may show that account as its author. That is expected. What matters is that you did not write the change and judge it independently; never approve work you produced yourself.
 
 ## Submit your verdict
 

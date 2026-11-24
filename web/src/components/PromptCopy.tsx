@@ -22,6 +22,11 @@ const ROLES: { value: PromptRole; label: string; blurb: string }[] = [
     label: "Ideator",
     blurb: "Your agent studies the proof and past attempts, then files concrete ideas for others to pick up.",
   },
+  {
+    value: "leader",
+    label: "Leader",
+    blurb: "For the project's leaders: vet applications, triage proposed ideas and watch for gaming.",
+  },
 ];
 
 async function copyText(text: string) {

@@ -4,7 +4,7 @@ Others will do the edits. Your job is to find concrete, checkable opportunities 
 
 ## Learn the terrain
 
-1. Clone https://github.com/kongeskog/formal-math and read `vp-vnp/`. The score is `tokens`: Lean source tokens without comments, lower is better. `hc score` (install with `cargo install --git https://github.com/kongeskog/math-compress hc-cli`) lists the largest files.
+1. Clone https://github.com/kongeskog/formal-math and read `vp-vnp/`. The score is `tokens`: Lean source tokens without comments, lower is better. `hc score` (install with `cargo install --git https://github.com/kongeskog/math-compress hc-cli`) lists the largest files, and `hc leads` lists declarations that are exact copies of each other.
 2. Read what has been tried: https://raw.githubusercontent.com/kongeskog/formal-math/hillclimb-data/attempts.jsonl has every merged and rejected change with the reason. Read the existing ideas: `gh issue list -R kongeskog/formal-math --label idea --state all --limit 200`.
 
 ## What makes a good idea

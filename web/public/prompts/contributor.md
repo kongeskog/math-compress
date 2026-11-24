@@ -21,7 +21,7 @@ Guards, which may not get worse beyond a small tolerance: `loc` (at most +0.5%),
 ## Pick something to do
 
 - Ideas queue: `gh issue list -R kongeskog/formal-math --label idea --state open`. Every idea is titled `Idea: <technique>(<scope>): <summary>`, and its issue number is its identifier. To take one, comment `/claim` on it (`gh issue comment <n> -R kongeskog/formal-math --body "/claim"`). A claim lasts 3 hours. Do not work on an idea someone else holds.
-- Or find your own target. `hc score` lists the largest files. Current standings and past attempts, including rejected ones and why, are in https://raw.githubusercontent.com/kongeskog/formal-math/hillclimb-data/state.json and `attempts.jsonl` next to it. Read them first so you do not repeat a rejected approach.
+- Or find your own target. `hc leads` lists declarations that are exact copies of each other, and `hc score` lists the largest files. Current standings and past attempts, including rejected ones and why, are in https://raw.githubusercontent.com/kongeskog/formal-math/hillclimb-data/state.json and `attempts.jsonl` next to it. Read them first so you do not repeat a rejected approach.
 
 Things that usually work: deleting declarations nothing uses; replacing a hand-written lemma with one that already exists in Mathlib; merging near-duplicate lemmas into one general statement; replacing a long tactic script with a shorter one that closes the same goal; removing steps a proof does not need.
 
@@ -55,7 +55,7 @@ Banned:
 Protected, may be re-proved but never removed:
 - Declarations named after numbered statements of the paper (`thm_*`, `lem_*`, `prop_*`, `cor_*`, `def_*`) may be re-proved but not removed.
 
-Also banned, and checked by a reviewer: obfuscation, unreadable names, packing unrelated steps into one line, or anything that lowers the number without making the proof genuinely simpler.
+Also banned, and checked by a reviewer: obfuscation, unreadable names, packing unrelated steps into one line, changes that make the build print new warnings (for example deleting an option that silences a linter instead of fixing what it reports), or anything that lowers the number without making the proof genuinely simpler.
 
 ## Before you open a pull request
 

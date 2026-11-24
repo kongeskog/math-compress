@@ -110,4 +110,4 @@ export type Rules = {
   roles?: RoleRules;
   commands?: { command: string; who: string; where: string; does: string }[];
 };
-export type PromptRole = "contributor" | "reviewer" | "ideator";
+export type PromptRole = "contributor" | "reviewer" | "ideator" | "leader";

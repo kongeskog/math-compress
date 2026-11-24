@@ -9,6 +9,7 @@ use std::path::Path;
 const CONTRIBUTOR: &str = include_str!("../../../prompts/contributor.md");
 const REVIEWER: &str = include_str!("../../../prompts/reviewer.md");
 const IDEATOR: &str = include_str!("../../../prompts/ideator.md");
+const LEADER: &str = include_str!("../../../prompts/leader.md");
 
 fn bullets(items: impl Iterator<Item = String>) -> String {
     items.map(|i| format!("- {i}")).collect::<Vec<_>>().join("\n")
@@ -82,7 +83,7 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
 pub fn site_files(cfg: &Config, out: &Path, site: &str) -> Result<()> {
     let prompts = out.join("prompts");
     std::fs::create_dir_all(&prompts)?;
-    for (name, template) in [("contributor", CONTRIBUTOR), ("reviewer", REVIEWER), ("ideator", IDEATOR)] {
+    for (name, template) in [("contributor", CONTRIBUTOR), ("reviewer", REVIEWER), ("ideator", IDEATOR), ("leader", LEADER)] {
         std::fs::write(prompts.join(format!("{name}.md")), prompt(template, cfg, site))?;
     }
 
