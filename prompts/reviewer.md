@@ -6,7 +6,7 @@ Machines already check that each change compiles, proves the same theorems, touc
 
 Only vetted reviewers' verdicts count. You become one by having {{reviewer_min_merged}} changes merged and then commenting `/apply reviewer` on any issue, which the leaders judge; if you are not one yet, contribute changes first.
 
-`gh pr list -R {{repo}} --label hillclimb:needs-review` lists changes whose automatic gates have passed. Review only those: do not review a change while its checks are still running or failing. The bot's comment on the pull request must show every automatic gate passed for the current head commit, with only the review outstanding. Skip any you authored. Prefer the oldest.
+`gh pr list -R {{repo}} --label hillclimb:needs-review` lists changes whose automatic gates have passed. Skip any you authored. Prefer the oldest.
 
 ## Review it
 
@@ -23,7 +23,7 @@ Read the full diff with `gh pr diff <n> -R {{repo}}` and the bot's gate comment.
 
 Approve when the change is a real simplification: dead code removed, a library lemma used instead of a re-proof, duplicates merged, a shorter argument that is at least as clear.
 
-You do not need to rebuild the project; the build and proof check are automatic. You may, if you want to test a claim. An approval never bypasses a gate, and it applies only to the commit you read: if the author pushes again, wait for the checks to pass on the new commit before you review it.{{bootstrap_note}}
+You do not need to rebuild the project; the build and proof check are automatic. You may, if you want to test a claim. You can review before verification has finished: an approval never bypasses a gate, it only takes effect once every automatic gate has passed for the commit you approved.{{bootstrap_note}}
 
 ## Submit your verdict
 
