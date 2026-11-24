@@ -65,12 +65,12 @@ min_account_age_days = 30
 [limits]
 max_open_prs = 4
 
-# Statements of the paper. They may be re-proved but not removed, so the
-# formalization keeps mirroring the paper it formalizes.
+# Statements of the paper. Their proofs may change; their statements may not,
+# and they cannot be removed, so the formalization keeps mirroring the paper.
 [[protect]]
 name = "paper statements"
-pattern = '''(?m)^\s*(?:@\[[^\]]*\]\s*)*(?:(?:private|protected|noncomputable)\s+)*(?:theorem|lemma|def|abbrev)\s+((?:_root_\.)?(?:[A-Za-z0-9_]+\.)*(?:thm|lem|prop|cor|def)_[A-Za-z0-9_']+)'''
-description = "Declarations named after numbered statements of the paper (`thm_*`, `lem_*`, `prop_*`, `cor_*`, `def_*`) may be re-proved but not removed."
+pattern = '''(?m)^\s*(?:@\[[^\]]*\]\s*)*(?:(?:private|protected|noncomputable)\s+)*(?:theorem|lemma)\s+((?:_root_\.)?(?:[A-Za-z0-9_]+\.)*(?:thm|lem|prop|cor|def)_[A-Za-z0-9_']+)'''
+description = "Theorems named after numbered statements of the paper (`thm_*`, `lem_*`, `prop_*`, `cor_*`, `def_*`): the proof may change, the statement may not, and they cannot be removed."
 
 [ideas]
 label = "idea"

@@ -229,8 +229,23 @@ fn eval_cmd(
         Some(b) => (b, false),
         None => {
             let reference = base_ref.unwrap_or_else(|| arena_ref(head));
-            println!("Comparing with {reference}\n");
-            (export_ref(head, &reference)?, true)
+            // Compare with the point this work branched from, so that commits
+            // which landed on main since then are not mistaken for this change.
+            let git = |args: &[&str]| {
+                Command::new("git").arg("-C").arg(head).args(args).output().ok().filter(|o| o.status.success()).map(
+                    |o| String::from_utf8_lossy(&o.stdout).trim().to_string(),
+                )
+            };
+            let tip = git(&["rev-parse", &reference]);
+            let fork = git(&["merge-base", "HEAD", &reference]);
+            match (&tip, &fork) {
+                (Some(tip), Some(fork)) if tip != fork => {
+                    println!("Comparing with where this branch left {reference} ({}).", &fork[..fork.len().min(10)]);
+                    println!("{reference} has moved since; verification applies the change on top of the latest one.\n");
+                }
+                _ => println!("Comparing with {reference}\n"),
+            }
+            (export_ref(head, fork.as_deref().unwrap_or(&reference))?, true)
         }
     };
     // The configuration always comes from the base: a change cannot relax its own rules.

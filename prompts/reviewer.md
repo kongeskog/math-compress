@@ -15,6 +15,7 @@ Read the full diff with `gh pr diff <n> -R {{repo}}` and the bot's gate comment.
 - Obfuscation: meaningless or shortened names, several unrelated steps packed onto one line, deeply nested terms replacing a readable argument.
 - A private shorthand: new notation, macros or abbreviations whose main purpose is to save tokens.
 - Brute force: a clear argument replaced by heavy automation that is much slower or fragile, or raised resource limits.
+- A protected paper statement whose meaning changed: the gate compares its text, but a changed definition it mentions changes what it says.
 - Removed structure a reader needs: a lemma that states a meaningful step inlined into a long proof just to save its statement.
 - Anything outside the stated purpose of the change, a description that does not match the diff, or a title whose technique does not describe what was done.
 - Noise traded for tokens: removing options that silence a linter, or anything else that makes the build print warnings it did not print before.

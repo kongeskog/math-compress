@@ -21,7 +21,7 @@ Good hunting grounds: declarations nothing refers to; lemmas that restate someth
 
 ## File it
 
-Search first; do not file a duplicate. Then:
+List the existing ideas again immediately before filing, because others file at the same time; do not file a duplicate. An idea must not rely on making the build print new warnings (for example by deleting an option that silences a linter). Then:
 
 `gh issue create -R {{repo}} --title "Idea: <technique>(<scope>): <summary>" --body "<body>"`
 

@@ -27,9 +27,10 @@ pub struct Measurement {
     pub deny: BTreeMap<String, DenyCount>,
     pub long_lines: u64,
     pub long_line_samples: Vec<String>,
-    /// Protect rule name -> declaration names found.
+    /// Protect rule name -> declaration name -> its statement (everything
+    /// before the proof), whitespace-normalized.
     #[serde(default)]
-    pub protected: BTreeMap<String, std::collections::BTreeSet<String>>,
+    pub protected: BTreeMap<String, BTreeMap<String, String>>,
     /// Repo-relative path -> content hash, for every file in the checkout.
     #[serde(skip)]
     pub tree: BTreeMap<String, String>,
@@ -40,6 +41,30 @@ fn decl_regex() -> Regex {
         r"(?m)^\s*(?:@\[[^\]]*\]\s*)*(?:(?:private|protected|public|noncomputable|unsafe|partial|nonrec|scoped|local)\s+)*(?:theorem|lemma|def|abbrev|instance|structure|inductive|class|example|opaque|axiom)\b",
     )
     .expect("static regex")
+}
+
+/// The statement of the declaration starting at the beginning of `code`:
+/// everything before its proof (the first `:=`, or `where`, or a pattern-match
+/// bar at the start of a line), whitespace-normalized.
+fn statement(code: &str) -> String {
+    let mut words = Vec::new();
+    for (i, line) in code.lines().enumerate() {
+        if i > 0 && (line.trim_start().starts_with('|')) {
+            break;
+        }
+        let mut done = false;
+        for w in line.split_whitespace() {
+            if w == ":=" || w == "where" {
+                done = true;
+                break;
+            }
+            words.push(w);
+        }
+        if done || words.len() > 4000 {
+            break;
+        }
+    }
+    words.join(" ")
 }
 
 /// Hash every file of a checkout. `.git` and Lake build directories are skipped.
@@ -129,7 +154,8 @@ pub fn measure(root: &Path, cfg: &Config) -> Result<Measurement> {
             let set = m.protected.entry(name.clone()).or_default();
             for cap in re.captures_iter(&code) {
                 if let Some(g) = cap.get(1) {
-                    set.insert(g.as_str().to_string());
+                    let from = cap.get(0).expect("group 0").start();
+                    set.insert(g.as_str().to_string(), statement(&code[from..]));
                 }
             }
         }
@@ -248,12 +274,21 @@ pub fn static_gates(cfg: &Config, base: &Measurement, head: &Measurement) -> Res
         }
     }
     for rule in &cfg.protect {
-        let empty = std::collections::BTreeSet::new();
+        let empty = BTreeMap::new();
         let b = base.protected.get(&rule.name).unwrap_or(&empty);
         let h = head.protected.get(&rule.name).unwrap_or(&empty);
-        let gone: Vec<String> = b.difference(h).cloned().collect();
+        let gone: Vec<String> = b.keys().filter(|k| !h.contains_key(*k)).cloned().collect();
+        let altered: Vec<String> =
+            b.iter().filter(|(k, v)| h.get(*k).is_some_and(|hv| hv != *v)).map(|(k, _)| k.clone()).collect();
         if !gone.is_empty() {
             problems.push(format!("protected declarations removed ({}): {}", rule.name, list(&gone, 5)));
+        }
+        if !altered.is_empty() {
+            problems.push(format!(
+                "the statement of a protected declaration changed ({}): {}; only its proof may change",
+                rule.name,
+                list(&altered, 5)
+            ));
         }
     }
     if head.long_lines > base.long_lines {
@@ -499,6 +534,10 @@ mod tests {
         };
         assert_eq!(run("theorem helper : True := trivial\n"), GateStatus::Fail);
         assert_eq!(run("theorem thm_main : True := trivial\n"), GateStatus::Pass);
+        // Same name, weaker statement: not allowed.
+        assert_eq!(run("theorem thm_main : True ∨ False := .inl trivial\n"), GateStatus::Fail);
+        // Reformatting the statement is fine.
+        assert_eq!(run("theorem thm_main :\n    True :=\n  trivial\n"), GateStatus::Pass);
     }
 
     #[test]
