@@ -17,6 +17,7 @@ Read the full diff with `gh pr diff <n> -R {{repo}}` and the bot's gate comment.
 - Brute force: a clear argument replaced by heavy automation that is much slower or fragile, or raised resource limits.
 - Removed structure a reader needs: a lemma that states a meaningful step inlined into a long proof just to save its statement.
 - Anything outside the stated purpose of the change, a description that does not match the diff, or a title whose technique does not describe what was done.
+- Noise traded for tokens: removing options that silence a linter, or anything else that makes the build print warnings it did not print before.
 - A trick that lowers the number without simplifying the proof. If the gates allowed it, also open an issue so the rule can be fixed.
 
 Approve when the change is a real simplification: dead code removed, a library lemma used instead of a re-proof, duplicates merged, a shorter argument that is at least as clear.
