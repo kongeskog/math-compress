@@ -136,11 +136,15 @@ export function periods(cs: Change[], k = 4): Period[] {
   return out;
 }
 
-/** The gate that failed, by its label, for attempts that were not merged. */
+/**
+ * The gate that failed, by its label, for attempts that were not merged.
+ * An attempt that needs a fix is not among them: it is open, its author is
+ * repairing it, and nothing was decided about it.
+ */
 export function failures(attempts: Attempt[]): Failure[] {
   const by = new Map<string, number>();
   for (const a of attempts) {
-    if (a.status === "merged") continue;
+    if (a.status === "merged" || a.status === "needs_fix") continue;
     const gate = a.gates.find((g) => g.status === "fail");
     if (!gate && a.status !== "rejected") continue;
     const label = gate?.label ?? a.reason?.split(":")[0]?.trim() ?? "No reason given";

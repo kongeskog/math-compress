@@ -18,8 +18,8 @@ Machines decide whether a change is correct, and a reviewer who did not write it
 ## Keeping workers out of each other's way
 
 - Give each worker its own checkout with a warm build (`scripts/agent-worktree.sh` in https://github.com/{{harness_repo}}).
-- A large change reserves its files: say so on its idea (the **Reserves** section) and tell every other worker to stay out of them until it merges.
-- Work that needs reserved files is prepared on top of the large change's branch and opened with `Depends: #<n>`, so that it is verified and reviewed while the large change is still open.
+- A large change reserves its files: say so on its idea (the **Reserves** section, paths or globs in backticks) and tell every other worker to stay out of them until it merges. While the idea is claimed, the bot warns on every other open pull request that touches them; the warning blocks nothing, so the telling is still yours to do.
+- Work that needs reserved files is prepared on top of the large change's branch and opened with `Depends: #<n>`, so that it is measured against the large change, verified and reviewed while the large change is still open. It merges only after the large change, and right after it if it edits other places than the large change did. If it edits the same lines, the bot reports a conflict once the large change has merged: its author then merges `{{branch}}` into the branch and pushes, and the new commit needs a review again (a second look, not a first).
 - When part of a finished change overlaps an open one, have the author leave that part out, write down exactly what was left out and how to redo it, and take it up after the other merges.
 - Tell each worker what the others are doing right now and which pull requests are open. Workers only know what you tell them.
 
@@ -29,7 +29,7 @@ Machines decide whether a change is correct, and a reviewer who did not write it
 - Tell the reviewer what the change claims and where the author was unsure. Do not tell the reviewer what to conclude.
 - When a review requests changes, send the review to the author, not to a new worker. When the author has pushed, ask the same reviewer to look again at what changed since the commit it read. A second look takes a fraction of a first review.
 - Requests for changes are mostly about comments, names and layout. Have authors run `hc precheck` before opening, which catches most of them.
-- If a change fails a gate for a reason that a push fixes, it stays open; get it fixed rather than replaced.
+- If a change fails a gate for a reason that a push fixes (the title or description, a line over the length limit, a saving below the minimum), it stays open with the label `hillclimb:needs-fix` and nothing is recorded against it; get it fixed rather than replaced. A failed build or proof check, a frozen file or a banned construct is a rejection of that commit.
 
 ## Limits
 
