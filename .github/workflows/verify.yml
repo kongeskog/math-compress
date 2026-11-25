@@ -23,7 +23,18 @@ on:
         type: number
         required: true
       stack:
-        description: Pull requests to apply before this one, in order (space separated)
+        description: >-
+          Pull requests to apply before this one, in order (space separated).
+          When empty, the open pull requests this one says it is built on
+          (`Depends: #n` in its description) are applied.
+        type: string
+        default: ""
+      min-delta:
+        description: >-
+          Judge the score with this minimum drop instead of the configured one
+          (set by the gatekeeper when a leader waived the minimum for the
+          commit). The result records it, and the gatekeeper accepts it only
+          while that waiver stands.
         type: string
         default: ""
       dir:
@@ -62,6 +73,7 @@ jobs:
       head_sha: ${{ steps.merge.outputs.head_sha }}
       base_sha: ${{ steps.merge.outputs.base_sha }}
       stack_shas: ${{ steps.merge.outputs.stack_shas }}
+      stack: ${{ steps.stack.outputs.stack }}
     steps:
       - name: Check out main
         uses: actions/checkout@v4
@@ -72,6 +84,27 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - uses: kongeskog/math-compress/.github/actions/setup-hc@main
+
+      # The gatekeeper names the changes to apply first. A run it did not
+      # start (a push, `/retry`) applies the open pull requests this one says
+      # it is built on, so that its gates measure its own difference and not
+      # theirs as well. The description is only read; what is applied is
+      # recorded in the result, and the gatekeeper decides what that result
+      # is worth.
+      - name: Find what the pull request is built on
+        id: stack
+        env:
+          PR: ${{ inputs.pr }}
+          STACK: ${{ inputs.stack }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "$STACK" ]; then
+            STACK="$(hc stack --config base/hillclimb.toml --pr "$PR")"
+          fi
+          echo "stack=$STACK" >> "$GITHUB_OUTPUT"
+
       # `stacked` is main with the changes queued ahead of this one applied;
       # `head` is that with this change applied. The result is valid for
       # exactly the tree of `stacked`, which is recorded.
@@ -79,7 +112,7 @@ jobs:
         id: merge
         env:
           PR: ${{ inputs.pr }}
-          STACK: ${{ inputs.stack }}
+          STACK: ${{ steps.stack.outputs.stack }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           set -euo pipefail
@@ -105,6 +138,20 @@ jobs:
           git -C base worktree add --quiet --detach ../head "$(git -C stacked rev-parse HEAD)"
           conflict=false
           merge head "$head_sha" || conflict=true
+          # The tree above is what gets built: the changes ahead applied as
+          # real merges. They will land as squashed commits, which do not have
+          # their own commits as ancestors. If this pull request's branch
+          # contains commits of a change ahead of it, merging it after that
+          # squash is another merge, which can conflict or give another tree.
+          # So the tree is computed that way too, and the gatekeeper merges
+          # from this result only if both are the same tree.
+          landing_tree="$(git -C head rev-parse 'HEAD^{tree}')"
+          if [ "$conflict" = false ] && [ -n "${stack_shas# }" ]; then
+            landing_args=""
+            for sha in $stack_shas; do landing_args="$landing_args --stack $sha"; done
+            # shellcheck disable=SC2086  # a list of `--stack <sha>` pairs built above
+            landing_tree="$(hc landing --repo base --base "$base_sha" $landing_args --head "$head_sha")"
+          fi
           {
             echo "base_sha=$base_sha"
             echo "head_sha=$head_sha"
@@ -112,10 +159,9 @@ jobs:
             echo "stack_args=${stack_args# }"
             echo "base_tree=$(git -C stacked rev-parse 'HEAD^{tree}')"
             echo "merged_tree=$(git -C head rev-parse 'HEAD^{tree}')"
+            echo "landing_tree=$landing_tree"
             echo "conflict=$conflict"
           } >> "$GITHUB_OUTPUT"
-
-      - uses: kongeskog/math-compress/.github/actions/setup-hc@main
 
       - name: Evaluate static gates
         id: eval
@@ -126,14 +172,21 @@ jobs:
           CONFLICT: ${{ steps.merge.outputs.conflict }}
           BASE_TREE: ${{ steps.merge.outputs.base_tree }}
           MERGED_TREE: ${{ steps.merge.outputs.merged_tree }}
+          LANDING_TREE: ${{ steps.merge.outputs.landing_tree }}
           STACK_ARGS: ${{ steps.merge.outputs.stack_args }}
+          MIN_DELTA: ${{ inputs.min-delta }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ "$CONFLICT" = true ]; then
-            echo "::error::The pull request conflicts with main."
+            echo "::error::The pull request conflicts with main, or with the changes applied before it."
             echo "ok=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          min_args=""
+          if [ -n "$MIN_DELTA" ]; then
+            [[ "$MIN_DELTA" =~ ^[0-9]+$ ]] || { echo "::error::bad minimum"; exit 1; }
+            min_args="--min-delta $MIN_DELTA"
           fi
           # How many pull requests the author has open, for the open-change limit.
           author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .user.login)"
@@ -141,7 +194,7 @@ jobs:
             --jq '.[].user.login' | grep -cxF "$author" || true)"
           # shellcheck disable=SC2086  # STACK_ARGS is a list of `--stack n@sha` pairs built above
           hc eval --head head --base stacked --config base/hillclimb.toml --pr "$PR" --head-sha "$HEAD_SHA" --base-sha "$BASE_SHA" \
-            --base-tree "$BASE_TREE" --merged-tree "$MERGED_TREE" $STACK_ARGS \
+            --base-tree "$BASE_TREE" --merged-tree "$MERGED_TREE" --landing-tree "$LANDING_TREE" $STACK_ARGS $min_args \
             --author "$author" --author-open-prs "$open_prs" \
             --out static.json | tee -a "$GITHUB_STEP_SUMMARY"
           if jq -e '[.gates[] | select(.status != "pass")] | length == 0' static.json >/dev/null; then
@@ -185,7 +238,7 @@ jobs:
           HEAD_SHA: ${{ needs.static.outputs.head_sha }}
           STACK_SHAS: ${{ needs.static.outputs.stack_shas }}
           PR: ${{ inputs.pr }}
-          STACK: ${{ inputs.stack }}
+          STACK: ${{ needs.static.outputs.stack }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           set -euo pipefail

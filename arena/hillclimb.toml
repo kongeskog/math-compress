@@ -93,6 +93,11 @@ max_slowdown_pct = 20
 [ideas]
 label = "idea"
 lease_hours = 3
+# An idea whose estimated saving is above this many tokens must report a trial
+# (what was ported or measured on one file, and the saving measured) before it
+# enters the queue. Estimates without one were often several times too high.
+# 0 turns the rule off.
+trial_above = 1000
 
 [build]
 workflow = "hillclimb-verify.yml"

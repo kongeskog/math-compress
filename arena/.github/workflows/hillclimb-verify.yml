@@ -18,6 +18,11 @@ on:
         required: false
         type: string
         default: ""
+      min_delta:
+        description: Minimum drop to judge the score with (set by the gatekeeper when a leader waived the minimum for the commit)
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -37,6 +42,7 @@ jobs:
     with:
       pr: ${{ fromJSON(format('{0}', github.event.pull_request.number || inputs.pr)) }}
       stack: ${{ inputs.stack || '' }}
+      min-delta: ${{ inputs.min_delta || '' }}
       dir: vp-vnp
 
   # Wake the gatekeeper when verification ends. It is dispatched rather than
