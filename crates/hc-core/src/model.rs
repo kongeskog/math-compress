@@ -381,9 +381,16 @@ pub const JUDGED_KEPT: usize = 2000;
 /// The gatekeeper's first judgement of one commit of a pull request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Judged {
-    /// When the statement below was first made for this commit. Approvals
-    /// submitted up to this moment do not count.
-    pub at: DateTime<Utc>,
+    /// The forge's time of the bot comment that first made the statement
+    /// below for this commit. Approvals submitted up to that moment do not
+    /// count. `None` until that comment has been made: in the pass that
+    /// makes or changes the record no approval counts.
+    #[serde(default)]
+    pub at: Option<DateTime<Utc>>,
+    /// The pull request the commit's `Depends` line named when the statement
+    /// was made, if it had one.
+    #[serde(default)]
+    pub names: Option<u64>,
     /// `pr@head_sha` of the open changes the commit was judged on top of (its
     /// `Depends` chain at their heads then), the first to merge first. Empty
     /// for a change on main.
@@ -393,6 +400,11 @@ pub struct Judged {
     /// directly (the last of `on`). `None` until that could be checked.
     #[serde(default)]
     pub contains: Option<bool>,
+    /// For a commit whose `Depends` line names a pull request that has
+    /// merged: whether the commit contains the commit that merged. `None`
+    /// until that could be checked, or when there is no such line.
+    #[serde(default)]
+    pub has_merged: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

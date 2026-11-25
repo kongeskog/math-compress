@@ -477,22 +477,33 @@ impl Forge for GhForge {
         Ok(())
     }
 
-    fn upsert_comment(&mut self, pr: u64, body: &str) -> Result<()> {
+    /// Returns GitHub's own time for the comment as it now stands: when it
+    /// was last written (`updated_at`, which equals `created_at` for a new
+    /// one). Approvals are compared with this time, so it must be GitHub's
+    /// clock and not this machine's; a reply without it is an error.
+    fn upsert_comment(&mut self, pr: u64, body: &str) -> Result<DateTime<Utc>> {
+        let stamp = |v: &Value| {
+            v.get("updated_at")
+                .and_then(Value::as_str)
+                .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+                .map(|t| t.with_timezone(&Utc))
+                .context("the forge gave no time for the gate comment")
+        };
         let existing = self.issue_comments(pr)?;
         let mine = existing
             .iter()
             .find(|c| s(c, "body").starts_with(COMMENT_MARKER) && s(&c["user"], "type") == "Bot");
+        if self.dry_run {
+            return Ok(mine.and_then(|c| stamp(c).ok()).unwrap_or_else(Utc::now));
+        }
         match mine {
-            Some(c) if s(c, "body").trim() == body.trim() => {}
+            Some(c) if s(c, "body").trim() == body.trim() => stamp(c),
             Some(c) => {
                 let id = c["id"].as_u64().unwrap_or(0);
-                self.write("PATCH", &format!("issues/comments/{id}"), &[("body", body)])?;
+                stamp(&self.write("PATCH", &format!("issues/comments/{id}"), &[("body", body)])?)
             }
-            None => {
-                self.write("POST", &format!("issues/{pr}/comments"), &[("body", body)])?;
-            }
+            None => stamp(&self.write("POST", &format!("issues/{pr}/comments"), &[("body", body)])?),
         }
-        Ok(())
     }
 
     fn set_label(&mut self, issue: u64, label: &str, present: bool) -> Result<()> {
@@ -574,6 +585,7 @@ impl Forge for GhForge {
                 user: s(&c["user"], "login"),
                 body: s(c, "body"),
                 created_at: time(c, "created_at"),
+                edited: s(c, "updated_at") != s(c, "created_at"),
             })
             .collect())
     }
@@ -609,6 +621,7 @@ impl Forge for GhForge {
                     user: s(&c["user"], "login"),
                     body: s(c, "body"),
                     created_at: time(c, "created_at"),
+                    edited: s(c, "updated_at") != s(c, "created_at"),
                 })
             })
             .collect())
