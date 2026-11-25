@@ -356,8 +356,8 @@ function Body() {
           <Bars rows={y().sizes} />
           <div class="border-t border-border px-5 py-2.5 text-xs text-faint">
             Each change costs one review and one full build whatever its size.
-            <Show when={store.rules()?.settings?.["score.min_delta"] != null}>
-              {" "}The current minimum is {num(Number(store.rules()!.settings["score.min_delta"]))} tokens.
+            <Show when={store.rules()?.settings?.["Minimum improvement"] != null}>
+              {" "}The current minimum is {num(Number(store.rules()!.settings["Minimum improvement"]))} tokens.
             </Show>
           </div>
         </Card>
