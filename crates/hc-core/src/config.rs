@@ -85,7 +85,7 @@ impl Conduct {
             return String::new();
         }
         format!(
-            "A file you changed may take at most {}% longer to compile than on `{branch}`. Where a proof changed in substance, time the file before and after (several runs of each, alternating; compare medians) and give the numbers in the description.",
+            "A file you changed may take at most {}% longer to compile than on `{branch}`. Where a proof changed in substance, run `hc time --base <a built checkout of {branch}>` and paste its table into the description.",
             self.max_slowdown_pct
         )
     }
