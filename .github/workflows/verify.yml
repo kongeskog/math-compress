@@ -203,7 +203,10 @@ jobs:
         working-directory: work/${{ inputs.dir }}
         run: |
           set -euo pipefail
-          curl --fail --location --proto '=https' --tlsv1.2 --output "$RUNNER_TEMP/elan.tar.gz" \
+          # Downloads are retried: a refused or interrupted download says
+          # nothing about the proof and must not end the run at the first try.
+          retry() { for i in 1 2 3 4; do "$@" && return 0; echo "::warning::attempt $i failed: $*"; sleep $((i * 30)); done; return 1; }
+          retry curl --fail --location --proto '=https' --tlsv1.2 --output "$RUNNER_TEMP/elan.tar.gz" \
             "https://github.com/leanprover/elan/releases/download/${ELAN_VERSION}/elan-x86_64-unknown-linux-gnu.tar.gz"
           echo "${ELAN_SHA256}  $RUNNER_TEMP/elan.tar.gz" | sha256sum --check
           mkdir -p "$RUNNER_TEMP/elan"
@@ -211,7 +214,7 @@ jobs:
           "$RUNNER_TEMP/elan/elan-init" -y --no-modify-path --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.elan/bin:$PATH"
-          lean --version
+          retry lean --version
 
       # The lakefile, manifest and toolchain are frozen, so fetching the
       # dependency cache runs only pinned, trusted code.
@@ -219,7 +222,12 @@ jobs:
         working-directory: work/${{ inputs.dir }}
         run: |
           if grep -q '"name": *"mathlib"' lake-manifest.json 2>/dev/null; then
-            lake exe cache get
+            for i in 1 2 3 4; do
+              lake exe cache get && break
+              echo "::warning::attempt $i to fetch the dependency cache failed"
+              [ "$i" -lt 4 ] || exit 1
+              sleep $((i * 30))
+            done
           fi
 
       # Restored from builds of main only; pull request builds never save.
@@ -242,7 +250,14 @@ jobs:
         run: |
           set -uo pipefail
           prefix="$(lean --print-prefix)"
-          docker pull --quiet "$IMAGE"
+          # Fetching the image is setup, not a build: if it cannot be fetched
+          # the step ends without a verdict.
+          for i in 1 2 3 4; do
+            docker pull --quiet "$IMAGE" && break
+            echo "::warning::attempt $i to fetch the build image failed"
+            [ "$i" -lt 4 ] || exit 1
+            sleep $((i * 30))
+          done
           start=$(date +%s)
           docker run --rm --network none --user "$(id -u):$(id -g)" \
             --cap-drop ALL --security-opt no-new-privileges \
@@ -320,8 +335,18 @@ jobs:
           path: work/${{ inputs.dir }}/.lake/build
           key: hillclimb-build-${{ inputs.dir }}-${{ github.sha }}-${{ github.run_id }}
 
+      # The gatekeeper reads this step by name: only when it has failed did
+      # main's own content fail to build or to pass the checker. A run that
+      # ends anywhere else (a download, the runner, the checker's setup) has
+      # not judged main, and the gatekeeper repeats the build instead of
+      # raising an alert. Either way the run fails: main counts as verified
+      # only when the build and the checker passed.
       - name: Fail if main itself does not verify
-        if: inputs.pr == 0 && (steps.build.outputs.compiles != 'pass' || steps.comparator.outputs.result != 'pass')
+        if: inputs.pr == 0 && (steps.build.outputs.compiles == 'fail' || steps.comparator.outputs.result == 'fail')
+        run: exit 1
+
+      - name: Stop without a verdict on main
+        if: inputs.pr == 0 && steps.build.outputs.compiles == 'pass' && steps.comparator.outputs.result != 'pass'
         run: exit 1
 
       - uses: actions/upload-artifact@v4

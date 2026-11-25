@@ -14,6 +14,10 @@ use std::process::Command;
 /// gatekeeper replace a verification seconds before it published its result.
 const UNFINISHED: [&str; 5] = ["queued", "in_progress", "pending", "waiting", "requested"];
 
+/// The step of the verify workflow that fails only when main's own content
+/// did not build or did not pass the independent check.
+const MAIN_VERDICT_STEP: &str = "Fail if main itself does not verify";
+
 pub struct GhForge {
     pub repo: String,
     pub branch: String,
@@ -131,21 +135,45 @@ impl Forge for GhForge {
         Ok(s(&c["commit"]["tree"], "sha"))
     }
 
-    fn main_verifies(&mut self, main: &str) -> Result<Option<bool>> {
+    fn main_verifies(&mut self, main: &str) -> Result<MainBuild> {
         let runs = self.get(&format!(
             "actions/workflows/{}/runs?event=workflow_dispatch&status=completed&branch={}&per_page=30",
             self.workflow, self.branch
         ))?;
+        let mut errors = 0;
+        let mut failed = false;
         for run in runs["workflow_runs"].as_array().into_iter().flatten() {
-            if pr_number(&s(run, "display_title")) == Some(0) && s(run, "head_sha") == main {
-                return Ok(match s(run, "conclusion").as_str() {
-                    "success" => Some(true),
-                    "failure" => Some(false),
-                    _ => None,
-                });
+            if pr_number(&s(run, "display_title")) != Some(0) || s(run, "head_sha") != main {
+                continue;
+            }
+            match s(run, "conclusion").as_str() {
+                "success" => return Ok(MainBuild::Passed),
+                "failure" | "timed_out" | "startup_failure" => {
+                    // Main's own content failed only if the step that says so
+                    // failed; a run that ended elsewhere judged nothing.
+                    let id = run["id"].as_u64().unwrap_or(0);
+                    let jobs = self.get(&format!("actions/runs/{id}/jobs?per_page=100"))?;
+                    let verdict = jobs["jobs"].as_array().into_iter().flatten().any(|j| {
+                        j["steps"].as_array().into_iter().flatten().any(|st| {
+                            s(st, "name") == MAIN_VERDICT_STEP && s(st, "conclusion") == "failure"
+                        })
+                    });
+                    if verdict {
+                        failed = true;
+                    } else {
+                        errors += 1;
+                    }
+                }
+                _ => {}
             }
         }
-        Ok(None)
+        Ok(if failed {
+            MainBuild::Failed
+        } else if errors > 0 {
+            MainBuild::Errored(errors)
+        } else {
+            MainBuild::Pending
+        })
     }
 
     fn open_prs(&mut self) -> Result<Vec<PullRequest>> {

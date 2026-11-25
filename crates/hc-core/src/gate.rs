@@ -103,7 +103,7 @@ pub trait Forge {
     fn main_tree(&mut self) -> Result<String>;
     /// Whether the latest finished build of main itself, at this commit,
     /// verified. `None` when there is no such build yet.
-    fn main_verifies(&mut self, main: &str) -> Result<Option<bool>>;
+    fn main_verifies(&mut self, main: &str) -> Result<MainBuild>;
     fn open_prs(&mut self) -> Result<Vec<PullRequest>>;
     /// Recently merged pull requests with their merge commit and time.
     fn merged_prs(&mut self) -> Result<Vec<(PullRequest, String, DateTime<Utc>)>>;
@@ -141,6 +141,23 @@ pub trait Forge {
     fn create_issue(&mut self, title: &str, body: &str, label: &str) -> Result<(u64, String)>;
     fn close_issue(&mut self, issue: u64) -> Result<()>;
 }
+
+/// What the builds of main at its current commit say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainBuild {
+    /// A build and the independent check passed.
+    Passed,
+    /// Main's own content failed to build or to pass the check.
+    Failed,
+    /// No build has finished yet.
+    Pending,
+    /// This many builds ended without judging main (a download, the runner,
+    /// the checker's setup), and none has judged it.
+    Errored(u32),
+}
+
+/// How many builds of main may end without a verdict before an alert is raised.
+pub const MAIN_BUILD_ATTEMPTS: u32 = 3;
 
 /// What a reconcile pass produced; the caller persists it.
 #[derive(Debug, Clone, Default)]
@@ -220,7 +237,26 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         let mut main_tree = self.forge.main_tree()?;
         // Never merge onto a main that is known not to verify.
         let mut paused: Option<&str> = None;
-        if self.forge.main_verifies(&main)? == Some(false) {
+        let main_build = self.forge.main_verifies(&main)?;
+        if let MainBuild::Errored(n) = main_build {
+            // Nothing was learned about main. Build it again, a bounded number
+            // of times; merging waits, because main is not known to verify.
+            paused = Some("Merging is paused: the build of main is being repeated after a setup error");
+            if n >= MAIN_BUILD_ATTEMPTS {
+                if ledger.alerts.insert(format!("main-unbuilt@{main}")) {
+                    self.forge.create_issue(
+                        &format!("Alert: main could not be built at {}", &main[..main.len().min(10)]),
+                        "Several builds of main ended before judging it: a download, the runner or the setup of the checker failed, not the proof. Merging is paused until a build of main passes. Leaders: read the latest `verify #0` runs, fix what they could not fetch or start, and run `verify #0` again. Nothing needs to be reverted.",
+                        LABEL_ALERT,
+                    )?;
+                }
+                out.log.push(format!("main could not be built in {n} attempts; merging paused"));
+            } else if !self.forge.active_verifies()?.contains(&0) {
+                self.forge.dispatch_verify(0, &[])?;
+                out.log.push(format!("build of main ended without a verdict (attempt {n}); building it again"));
+            }
+        }
+        if main_build == MainBuild::Failed {
             paused = Some("Merging is paused: main itself does not verify");
             if ledger.alerts.insert(format!("main-broken@{main}")) {
                 self.forge.create_issue(
@@ -1308,6 +1344,7 @@ mod tests {
         extra_results: Vec<VerifyResult>,
         already_merged: Vec<(PullRequest, String, DateTime<Utc>)>,
         main_ok: Option<bool>,
+        main_errors: u32,
         stacks: Vec<Vec<u64>>,
         reviews: BTreeMap<u64, Vec<ReviewInfo>>,
         pr_comments: BTreeMap<u64, Vec<CommentInfo>>,
@@ -1337,8 +1374,13 @@ mod tests {
         fn main_tree(&mut self) -> Result<String> {
             Ok(format!("tree:{}", self.main))
         }
-        fn main_verifies(&mut self, _: &str) -> Result<Option<bool>> {
-            Ok(self.main_ok)
+        fn main_verifies(&mut self, _: &str) -> Result<MainBuild> {
+            Ok(match self.main_ok {
+                Some(true) => MainBuild::Passed,
+                Some(false) => MainBuild::Failed,
+                None if self.main_errors > 0 => MainBuild::Errored(self.main_errors),
+                None => MainBuild::Pending,
+            })
         }
         fn merged_prs(&mut self) -> Result<Vec<(PullRequest, String, DateTime<Utc>)>> {
             Ok(self.already_merged.clone())
@@ -1973,6 +2015,37 @@ mod tests {
         run(&mut m, &mut ledger, &[]);
         assert!(m.merged.is_empty());
         assert_eq!(m.created.len(), 1, "the alert is raised once");
+        m.main_ok = Some(true);
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [1]);
+    }
+
+    #[test]
+    fn a_build_of_main_without_a_verdict_is_repeated_before_any_alert() {
+        let mut m = green();
+        m.reviews.insert(1, vec![approve("bob", &head(1))]);
+        m.main_errors = 1;
+        let mut ledger = Ledger::default();
+        run(&mut m, &mut ledger, &[]);
+        assert!(m.merged.is_empty(), "main is not known to verify");
+        assert_eq!(m.dispatched, [0], "main is built again");
+        assert!(m.created.is_empty(), "a failed download is not an alert");
+
+        // While that build runs nothing more is dispatched.
+        m.active.insert(0);
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.dispatched, [0]);
+
+        // Three builds without a verdict: now somebody has to look.
+        m.active.clear();
+        m.main_errors = 3;
+        run(&mut m, &mut ledger, &[]);
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.dispatched, [0]);
+        assert_eq!(m.created.len(), 1);
+        assert!(m.created[0].contains("could not be built"));
+
+        // A build that passes ends the pause.
         m.main_ok = Some(true);
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.merged, [1]);
