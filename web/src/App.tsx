@@ -14,11 +14,13 @@ const Rules = lazy(() => import("~/pages/Rules"));
 const People = lazy(() => import("~/pages/People"));
 const Og = lazy(() => import("~/pages/Og"));
 const Operations = lazy(() => import("~/pages/Operations"));
+const Yield = lazy(() => import("~/pages/Yield"));
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/attempts", label: "Attempts" },
   { href: "/ideas", label: "Ideas" },
+  { href: "/yield", label: "Yield" },
   { href: "/operations", label: "Operations" },
   { href: "/people", label: "People" },
   { href: "/rules", label: "Rules" },
@@ -171,6 +173,7 @@ export default function App() {
       <Route path="/attempts/:pr" component={AttemptDetail} />
       <Route path="/rules" component={Rules} />
       <Route path="/people" component={People} />
+      <Route path="/yield" component={Yield} />
       <Route path="/operations" component={Operations} />
       <Route path="/og" component={Og} />
       <Route path="*" component={NotFound} />
