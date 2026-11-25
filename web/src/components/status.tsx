@@ -10,6 +10,7 @@ const ATTEMPT: Record<AttemptStatus, { label: string; variant: "good" | "warn" |
   awaiting_review: { label: "Awaiting review", variant: "warn" },
   stale: { label: "Re-verifying", variant: "warn" },
   conflict: { label: "Conflict", variant: "bad" },
+  needs_fix: { label: "Needs a fix", variant: "warn" },
 };
 
 export function AttemptBadge(props: { status: AttemptStatus }) {

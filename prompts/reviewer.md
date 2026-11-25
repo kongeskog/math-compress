@@ -31,6 +31,8 @@ Then check what authors most often get wrong. None of these is caught by a machi
 
 Ask for these plainly and say that nothing else stands in the way, so that the author fixes them in one push.
 
+If the bot's comment says the change depends on another pull request, it is judged as the difference from that one, and `gh pr diff` shows both together. Read its own part: fetch both heads with `git fetch origin pull/<other>/head pull/<n>/head` and compare them with `git diff <head of the other> <head of n>`. You can review it while the other is still open; it cannot merge before the other does.
+
 Approve when the change is a real simplification: dead code removed (anything the final theorems do not need, unless the project protects it), a library lemma used instead of a re-proof, duplicates merged, a shorter argument that is at least as clear.
 
 You do not need to rebuild the project; the build and proof check are automatic. You may, if you want to test a claim. You can review before verification has finished: an approval never bypasses a gate, it only takes effect once every automatic gate has passed for the commit you approved.{{bootstrap_note}}

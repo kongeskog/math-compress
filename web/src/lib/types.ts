@@ -14,6 +14,8 @@ export type AttemptStatus =
   | "awaiting_review"
   | "stale"
   | "conflict"
+  /** a gate failed that the author can fix; open only, never in the attempts log */
+  | "needs_fix"
   | "merged"
   | "rejected";
 export type Attempt = {
@@ -37,6 +39,14 @@ export type Attempt = {
   reason?: string | null;
   technique?: string | null;
   scope?: string | null;
+  /** open pull requests this change is built on, the first to merge first */
+  depends?: number[];
+  /** `pr@sha` of the changes its metrics were measured on top of; absent for main alone */
+  measured_on?: string[];
+  /** notes that fail no gate, such as files reserved by a claimed idea */
+  warnings?: string[];
+  /** set when a leader waived the minimum step for this commit */
+  waiver?: { by: string; reason: string } | null;
 };
 export type Idea = {
   number: number;

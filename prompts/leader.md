@@ -22,6 +22,7 @@ Machines decide whether a change is correct. Leaders decide who is trusted to ju
 - `/revoke @login reviewer|ideator|leader`.
 - `/approve <commit>`, `/request-changes` on a pull request, as any reviewer.
 - `/retry` on a pull request whose verification was lost.
+- `/waive-min <commit> <reason>` on a pull request whose saving is below the minimum but which is worth a review and a build anyway (it removes something wrong, or unblocks a larger change). It names the head commit, like an approval, and a later push needs a new one; the reason is mandatory and is shown on the pull request and recorded. The change must still lower the score by at least 1 and pass every other gate. Not for your own account's changes, except in the bootstrap phase.
 
 ## Standards
 

@@ -35,7 +35,7 @@ export function AttemptRow(props: { a: Attempt; dense?: boolean }) {
         </div>
         <div class="mt-0.5 truncate text-xs text-muted-foreground">
           @{props.a.author} · {ago(props.a.decided_at ?? props.a.created_at, store.now())}
-          <Show when={props.a.status === "rejected" && props.a.reason}>
+          <Show when={(props.a.status === "rejected" || props.a.status === "needs_fix") && props.a.reason}>
             {" "}
             · {props.a.reason}
           </Show>
