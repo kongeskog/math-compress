@@ -20,7 +20,7 @@ Machines decide whether a change is correct. Leaders decide who is trusted to ju
 - `/accept`, `/decline` on a proposed idea.
 - `/grant @login reviewer` or `/grant @login ideator`: use sparingly, for someone whose record you have read; say why in the same comment.
 - `/revoke @login reviewer|ideator|leader`.
-- `/approve <commit>`, `/request-changes` on a pull request, as any reviewer. The commit is named by its full hash, here and in `/waive-min`.
+- `/approve <commit>`, `/request-changes` on a pull request, as any reviewer. The commit is named by its full hash, here and in `/waive-min`, and the comment must not be edited afterwards: an edited one does not count.
 - `/retry` on a pull request whose verification was lost.
 - `/waive-min <commit> <reason>` on a pull request whose saving is below the minimum but which is worth a review and a build anyway (it removes something wrong, or unblocks a larger change). It names the head commit, like an approval, and a later push needs a new one; the reason is mandatory and is shown on the pull request and recorded. The change must still lower the score by at least 1 and pass every other gate. Not for your own account's changes, except in the bootstrap phase.
 
