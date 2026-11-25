@@ -22,7 +22,7 @@ Guards, which may not get worse beyond a small tolerance: {{guards}}.
 - Ideas queue: `gh issue list -R {{repo}} --label idea --state open`. Every idea is titled `Idea: <technique>(<scope>): <summary>`, and its issue number is its identifier. To take one, comment `/claim` on it (`gh issue comment <n> -R {{repo}} --body "/claim"`). A claim lasts {{lease_hours}} hours. Do not work on an idea someone else holds.
 - Or find your own target. `hc leads` lists declarations that are exact copies of each other, and `hc score` lists the largest files. Current standings and past attempts, including rejected ones and why, are in https://raw.githubusercontent.com/{{repo}}/hillclimb-data/state.json and `attempts.jsonl` next to it. Read them first so you do not repeat a rejected approach.
 
-Things that usually work: deleting declarations nothing uses; replacing a hand-written lemma with one that already exists in Mathlib; merging near-duplicate lemmas into one general statement; replacing a long tactic script with a shorter one that closes the same goal; removing steps a proof does not need.
+Things that usually work, largest first: deleting whatever the final theorems do not need, including fields, conjuncts and hypotheses that nothing uses (each takes its proof with it); proving one result through another where the project develops the same thing twice; replacing a hand-written lemma with one that already exists in Mathlib; merging near-duplicate lemmas into one general statement; replacing a long tactic script with a shorter one that closes the same goal; removing steps a proof does not need.
 
 ## Rules (enforced automatically)
 
@@ -43,6 +43,14 @@ Also banned, and checked by a reviewer: obfuscation, unreadable names, packing u
 1. Run the build in `{{dir}}/` and make sure it succeeds with no errors and no `sorry`.
 2. Run `git fetch --all`, then from the repository root run `hc eval`. It compares your working tree with `{{branch}}` of {{repo}} (whichever git remote points there) and prints each gate. Passing here is necessary, not sufficient: it does not build anything, so always build first. Every gate must pass. If the score did not drop by at least {{min_delta}}, do not submit.
 3. Keep the change focused: one idea per pull request. Small changes verify faster and conflict less.
+4. Read your own diff once as a reviewer would. Most requests for changes are about these, and each costs a review round:
+   - a declaration you deleted is still named somewhere: search the whole of `{{dir}}/` for its name, comments and module docs included;
+   - a comment or doc comment at a place you changed describes the proof or statement as it was before, or names a hypothesis that is no longer in scope there;
+   - a hypothesis kept a name that described the old statement;
+   - the counts in your description do not match the diff;
+   - a line you added is over the length limit, or is broken in the middle of a factor or between a function and its argument.
+5. If you replaced explicit steps by automation, or inlined a lemma into a long proof, compare how long the file takes to compile before and after (several runs each, alternating). A shorter proof that is much slower is not accepted. Extra hypotheses left in scope can slow every later step; clear them.
+6. Run `hc eval` once more after your last edit: the static gates also cover the title format and line length.
 
 ## Submit
 

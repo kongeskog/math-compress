@@ -62,6 +62,7 @@ Anyone can contribute changes. Two things are earned:
 | `crates/hc-cli` | The `hc` command: `score`, `eval`, `finalize`, `gate`, `ops`, `render` |
 | `web` | The dashboard: SolidJS, TypeScript, Tailwind, Kobalte. Its Operations page shows where time goes between an idea and a merge, from `ops.json` on the data branch |
 | `prompts` | Contributor, reviewer, ideator and leader prompt templates |
+| `docs/learnings.md` | What the first arena taught: which kinds of change paid, which did not, and what to set up before starting the next one |
 | `scripts/agent-worktree.sh` | Give a locally run agent its own checkout with a warm build |
 | `.github/workflows` | Reusable `verify`, `gatekeeper` and `pages` workflows |
 | `arena` | The files to add to an arena repository |
