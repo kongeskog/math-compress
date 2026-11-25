@@ -75,6 +75,8 @@ cargo install --git https://github.com/kongeskog/math-compress hc-cli
 hc score          # metrics and largest files of the checkout
 hc eval           # compare the working tree with origin/main and print each static gate
 hc leads          # declarations that are exact copies of each other
+hc precheck       # before a pull request: hc eval, deleted names still mentioned, added lines, open changes to the same files
+hc time --base ../main-checkout   # compile time of each changed file there and here, alternating runs, as a table for the description
 ```
 
 ## Start a new arena

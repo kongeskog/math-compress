@@ -43,14 +43,14 @@ Also banned, and checked by a reviewer: obfuscation, unreadable names, packing u
 1. Run the build in `{{dir}}/` and make sure it succeeds with no errors and no `sorry`.
 2. Run `git fetch --all`, then from the repository root run `hc eval`. It compares your working tree with `{{branch}}` of {{repo}} (whichever git remote points there) and prints each gate. Passing here is necessary, not sufficient: it does not build anything, so always build first. Every gate must pass. If the score did not drop by at least {{min_delta}}, do not submit.
 3. Keep the change focused: one idea per pull request. Small changes verify faster and conflict less.
-4. Read your own diff once as a reviewer would. Most requests for changes are about these, and each costs a review round:
-   - a declaration you deleted is still named somewhere: search the whole of `{{dir}}/` for its name, comments and module docs included;
+4. Run `hc precheck` from the repository root (with `--title "<title>" --body-file <file>` once you have written the description). It runs `hc eval` and also reports a deleted declaration still named anywhere in `{{dir}}/` (comments and module docs included), added lines over the length limit or broken in the middle of a product, counts of files in the description that do not match the diff, and open pull requests that change the same files. Fix every error it reports and look at every warning.
+5. Then read your own diff once as a reviewer would. Most requests for changes are about these, and each costs a review round:
    - a comment or doc comment at a place you changed describes the proof or statement as it was before, or names a hypothesis that is no longer in scope there;
    - a hypothesis kept a name that described the old statement;
-   - the counts in your description do not match the diff;
-   - a line you added is over the length limit, or is broken in the middle of a factor or between a function and its argument.
-5. If you replaced explicit steps by automation, or inlined a lemma into a long proof, time the file before and after. Automation over nonlinear arithmetic is the usual cause of a slow file; so are extra hypotheses left in scope, which slow every later step: clear them.
-6. Run `hc eval` once more after your last edit: the static gates also cover the title format and line length.
+   - the other counts in your description (sites, lemmas) do not match the diff;
+   - a line you added is broken between a function and its argument.
+6. If you replaced explicit steps by automation, or inlined a lemma into a long proof, time the changed files with `hc time --base <a built checkout of {{branch}}>` (build both checkouts first) and paste the Markdown table it prints into the description. Automation over nonlinear arithmetic is the usual cause of a slow file; so are extra hypotheses left in scope, which slow every later step: clear them.
+7. Run `hc precheck` once more after your last edit, with `--title` and `--body-file`: it also checks the title format and line length.
 
 ## Submit
 
