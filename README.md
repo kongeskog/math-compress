@@ -52,6 +52,8 @@ Anyone can contribute changes. Two things are earned:
 
 **Leaders** grant roles: directly (`/grant @login reviewer`), or by endorsing an application (`/apply reviewer` opens one once the applicant has enough merged changes; `/endorse` by leaders grants it). New leaders need more experience and more endorsements. Founding leaders are listed in `hillclimb.toml`. Roles and applications are recorded in `roles.json` on the data branch and shown on the dashboard.
 
+**Coordinators** hold no special rights. Whoever runs several workers at once (contributors, reviewers, scouts) can follow `hc prompt coordinator`: what to run before the first change, how to order the queue by what each change returns, how to keep workers out of each other's files, and how to move a change through review.
+
 `bootstrap = true` is for the phase in which the leaders run every agent from their own account: a leader's review then counts on that account's changes, and the gate comment says so. Turn it off before inviting others.
 
 ## Layout
@@ -61,8 +63,7 @@ Anyone can contribute changes. Two things are earned:
 | `crates/hc-core` | Configuration, tokenizer, metrics, static gates, gatekeeper state machine |
 | `crates/hc-cli` | The `hc` command: `score`, `eval`, `finalize`, `gate`, `ops`, `render` |
 | `web` | The dashboard: SolidJS, TypeScript, Tailwind, Kobalte. Its Operations page shows where time goes between an idea and a merge, from `ops.json` on the data branch |
-| `prompts` | Contributor, reviewer, ideator and leader prompt templates |
-| `docs/learnings.md` | What the first arena taught: which kinds of change paid, which did not, and what to set up before starting the next one |
+| `prompts` | Contributor, reviewer, ideator, leader and coordinator prompt templates (`hc prompt <role>` renders one for an arena) |
 | `scripts/agent-worktree.sh` | Give a locally run agent its own checkout with a warm build |
 | `.github/workflows` | Reusable `verify`, `gatekeeper` and `pages` workflows |
 | `arena` | The files to add to an arena repository |
@@ -80,7 +81,7 @@ hc leads          # declarations that are exact copies of each other
 
 1. Fork or create the repository that holds the proof. It needs a check that the theorems are unchanged; for Lean, a `comparator.json` and the `comparator-check.sh` script.
 2. Copy `arena/hillclimb.toml` to its root and edit it: repository, project directory, frozen paths, deny rules.
-   Three choices in that file shape everything after, so make them before the first change (`docs/learnings.md` has the first arena's experience with each):
+   Three choices in that file shape everything after, so make them before the first change:
    - **What is protected.** By default only the frozen files and the final theorems: anything those theorems do not need may be deleted and intermediate statements may change. To keep a proof that mirrors a paper statement by statement, add `[[protect]]` rules. These are different projects; the first arena got two thirds of its reduction after dropping protection.
    - **The smallest change worth accepting**, `score.min_delta`. Each change costs a review and a full build whatever its size.
    - **Conduct**, the `[conduct]` section: how much slower a changed file may compile (`max_slowdown_pct`, default 10), and whether tactics that search for a proof may replace explicit steps to save tokens (`[conduct.search_tactics]`, off unless `enabled = true`, with a limit per file, a minimum saving per place and a required comment).

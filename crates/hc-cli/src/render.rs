@@ -10,6 +10,7 @@ const CONTRIBUTOR: &str = include_str!("../../../prompts/contributor.md");
 const REVIEWER: &str = include_str!("../../../prompts/reviewer.md");
 const IDEATOR: &str = include_str!("../../../prompts/ideator.md");
 const LEADER: &str = include_str!("../../../prompts/leader.md");
+const COORDINATOR: &str = include_str!("../../../prompts/coordinator.md");
 
 fn bullets(items: impl Iterator<Item = String>) -> String {
     items.map(|i| format!("- {i}")).collect::<Vec<_>>().join("\n")
@@ -35,7 +36,7 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
         .join(", ");
     let build = p.local_build.iter().map(|c| format!("   `{c}`")).collect::<Vec<_>>().join("\n");
     let theorems = p.theorems.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>().join(", ");
-    let vars: [(&str, String); 27] = [
+    let vars: [(&str, String); 28] = [
         ("title", p.title.clone()),
         ("repo", p.repo.clone()),
         ("dir", p.dir.clone()),
@@ -52,6 +53,7 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
         ("lease_hours", cfg.ideas.lease_hours.to_string()),
         ("review_required", cfg.review.required.to_string()),
         ("review_large", cfg.review.required_large.to_string()),
+        ("large_change_files", cfg.review.large_change_files.to_string()),
         ("title_format", cfg.format.title_help()),
         (
             "techniques",
@@ -113,6 +115,7 @@ pub fn role_prompt(role: &str, cfg: &Config, site: &str) -> Result<String> {
         "reviewer" => REVIEWER,
         "ideator" => IDEATOR,
         "leader" => LEADER,
+        "coordinator" => COORDINATOR,
         other => anyhow::bail!("unknown role `{other}`"),
     };
     Ok(prompt(template, cfg, site))

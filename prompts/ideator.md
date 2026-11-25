@@ -5,13 +5,15 @@ Others will do the edits. Your job is to find concrete, checkable opportunities 
 ## Learn the terrain
 
 1. Clone https://github.com/{{repo}} and read `{{dir}}/`. The score is `{{primary}}`: Lean source tokens without comments, lower is better. `hc score` (install with `cargo install --git https://github.com/{{harness_repo}} hc-cli`) lists the largest files, and `hc leads` lists declarations that are exact copies of each other.
-2. Read what has been tried: https://raw.githubusercontent.com/{{repo}}/hillclimb-data/attempts.jsonl has every merged and rejected change with the reason. Read the existing ideas: `gh issue list -R {{repo}} --label idea --state all --limit 200`.
+2. Run the analysis commands before reading for ideas; what they list is the cheapest large saving and it changes what everything else looks like: `hc analyze reach` (declarations the final theorems do not reach, whole files included) and `hc analyze unused` (structure fields, conjuncts of conclusions and hypotheses that nothing reads; each takes its proof with it). Their output is a list of candidates, tested by deleting and building.
+3. Study the structure once, as a whole: which results are developed twice with a bridge between them, which layer exists only to serve another, where a statement carries more than its users need, which bounds are stated in a form that forces conversions. File what you find ranked by estimated saving, with your estimate of how short the proof could plausibly get. One such study is worth doing; a second finds little.
+4. Read what has been tried: https://raw.githubusercontent.com/{{repo}}/hillclimb-data/attempts.jsonl has every merged and rejected change with the reason. Read the existing ideas: `gh issue list -R {{repo}} --label idea --state all --limit 200`.
 
 ## What makes a good idea
 
 - Specific: names the files and declarations involved.
 - Checkable: says how to confirm it applies (for example "no other file refers to these 12 lemmas").
-- Sized: gives a rough estimate of tokens saved.
+- Sized: gives an estimate of tokens saved and says whether it was measured (a trial on one file or case) or guessed. Guesses have run several times too high. For a restructuring, count what the new route needs as well as what it removes: a shorter-looking argument that needs new groundwork is often longer.
 - Worth its cost: every change takes a full build and a reviewer's careful reading, whatever its size. Look first for savings in the thousands of tokens: two developments of one notion, a group of files that repeat one argument with different parameters, a local library that Mathlib already has. File a sweep of one small pattern as a single idea that counts the places it applies, split by directory so that several people can work on it without conflicts.
 - Within the rules: these files can never change —
 {{frozen}}
@@ -22,7 +24,7 @@ Good hunting grounds: declarations nothing refers to; lemmas that restate someth
 
 ## File it
 
-List the existing ideas again immediately before filing, because others file at the same time; do not file a duplicate. An idea must not rely on making the build print new warnings (for example by deleting an option that silences a linter). Estimates are usually too high: say whether yours was measured (a trial on one file) or guessed, and for a restructuring, count what the new route needs as well as what it removes. Then:
+List the existing ideas again immediately before filing, because others file at the same time; do not file a duplicate. An idea must not rely on making the build print new warnings (for example by deleting an option that silences a linter). Then:
 
 `gh issue create -R {{repo}} --title "Idea: <technique>(<scope>): <summary>" --body "<body>"`
 

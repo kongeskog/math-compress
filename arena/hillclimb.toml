@@ -73,7 +73,8 @@ max_open_prs = 4
 # protected: any declaration, clause or file the final theorems do not need
 # may be removed, and statements of intermediate results may change.
 # For the second, add `[[protect]]` rules (name, pattern, description) for the
-# declarations that must stay; see docs/learnings.md for what that costs.
+# declarations that must stay. The two are different projects: this arena got
+# two thirds of its reduction after dropping protection.
 
 # Rules a reviewer checks; the prompts state them.
 [conduct]

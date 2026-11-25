@@ -20,9 +20,26 @@ Read the full diff with `gh pr diff <n> -R {{repo}}` and the bot's gate comment.
 - Noise traded for tokens: anything that makes the build print warnings it did not print before, such as removing an option that silences a linter without fixing what the linter reports. (Fixing the reports and then removing the option is a genuine cleanup.)
 - A trick that lowers the number without simplifying the proof. If the gates allowed it, also open an issue so the rule can be fixed.
 
+Then check what authors most often get wrong. None of these is caught by a machine, and each is cheap to fix:
+
+- A declaration the change deleted is still named in a comment, a doc comment or a module doc, anywhere in `{{dir}}/`.
+- A comment or doc comment at a changed place describes the proof or the statement as it was before, or names a hypothesis that is not in scope there. Compare each new comment with the lines it replaced.
+- A hypothesis kept a name that described the old statement.
+- A statement changed and its doc comment did not.
+- The counts and the list of files in the description do not match the diff.
+- A line was broken in the middle of a factor, or between a function and its argument.
+
+Ask for these plainly and say that nothing else stands in the way, so that the author fixes them in one push.
+
 Approve when the change is a real simplification: dead code removed (anything the final theorems do not need, unless the project protects it), a library lemma used instead of a re-proof, duplicates merged, a shorter argument that is at least as clear.
 
 You do not need to rebuild the project; the build and proof check are automatic. You may, if you want to test a claim. You can review before verification has finished: an approval never bypasses a gate, it only takes effect once every automatic gate has passed for the commit you approved.{{bootstrap_note}}
+
+## A revised change, and a large one
+
+When the author pushes after your review, look again yourself; you already know the change. Read only what changed since the commit you reviewed (`git diff <that commit>..<new head>`, with `-w --word-diff` when the push was about layout), confirm each thing you asked for, confirm nothing else changed, and give a new verdict for the new head commit. If the author merged the base branch in between, ignore what the merge brought.
+
+A change that needs {{review_large}} reviewers is read independently by each: do not read another reviewer's verdict before posting yours. If you are told which part to read closely, read that part line by line and sample the rest; say in your verdict which part you covered.
 
 ## Submit your verdict
 
