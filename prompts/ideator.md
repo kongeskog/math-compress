@@ -22,7 +22,7 @@ Good hunting grounds: declarations nothing refers to; lemmas that restate someth
 
 ## File it
 
-List the existing ideas again immediately before filing, because others file at the same time; do not file a duplicate. An idea must not rely on making the build print new warnings (for example by deleting an option that silences a linter). Then:
+List the existing ideas again immediately before filing, because others file at the same time; do not file a duplicate. An idea must not rely on making the build print new warnings (for example by deleting an option that silences a linter). Estimates are usually too high: say whether yours was measured (a trial on one file) or guessed, and for a restructuring, count what the new route needs as well as what it removes. Then:
 
 `gh issue create -R {{repo}} --title "Idea: <technique>(<scope>): <summary>" --body "<body>"`
 

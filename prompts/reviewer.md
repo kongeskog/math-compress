@@ -14,7 +14,7 @@ Read the full diff with `gh pr diff <n> -R {{repo}}` and the bot's gate comment.
 
 - Obfuscation: meaningless or shortened names, several unrelated steps packed onto one line, deeply nested terms replacing a readable argument.
 - A private shorthand: new notation, macros or abbreviations whose main purpose is to save tokens.
-- Brute force: a clear argument replaced by heavy automation that is much slower or fragile, or raised resource limits.{{protect_reviewer}}
+- Brute force: a clear argument replaced by heavy automation that is much slower or fragile, or raised resource limits.{{conduct_reviewer}}{{protect_reviewer}}
 - Removed structure a reader needs: a lemma that states a meaningful step inlined into a long proof just to save its statement.
 - Anything outside the stated purpose of the change, a description that does not match the diff, or a title whose technique does not describe what was done.
 - Noise traded for tokens: anything that makes the build print warnings it did not print before, such as removing an option that silences a linter without fixing what the linter reports. (Fixing the reports and then removing the option is a genuine cleanup.)

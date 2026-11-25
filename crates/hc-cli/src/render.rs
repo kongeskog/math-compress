@@ -35,7 +35,7 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
         .join(", ");
     let build = p.local_build.iter().map(|c| format!("   `{c}`")).collect::<Vec<_>>().join("\n");
     let theorems = p.theorems.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>().join(", ");
-    let vars: [(&str, String); 25] = [
+    let vars: [(&str, String); 27] = [
         ("title", p.title.clone()),
         ("repo", p.repo.clone()),
         ("dir", p.dir.clone()),
@@ -88,6 +88,14 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
                 String::new()
             },
         ),
+        ("conduct_contributor", {
+            let rules: Vec<String> = [cfg.conduct.time_rule(&p.branch), cfg.conduct.search_rule()]
+                .into_iter()
+                .filter(|r| !r.is_empty())
+                .collect();
+            if rules.is_empty() { String::new() } else { format!("\n\n{}", rules.join("\n\n")) }
+        }),
+        ("conduct_reviewer", cfg.conduct.reviewer_bullets()),
         ("max_open_prs", cfg.limits.max_open_prs.to_string()),
         ("reviewer_min_merged", cfg.roles.reviewer_min_merged.to_string()),
         ("ideator_min_merged", cfg.roles.ideator_min_merged.to_string()),
@@ -181,6 +189,8 @@ pub fn site_files(cfg: &Config, out: &Path, site: &str) -> Result<()> {
             "Open changes per author": cfg.limits.max_open_prs,
             "Minimum account age to apply for a role (days)": cfg.roles.min_account_age_days,
             "Idea claim length (hours)": cfg.ideas.lease_hours,
+            "Compile time of a changed file (max % slower)": cfg.conduct.max_slowdown_pct,
+            "Search tactics to shorten proofs": if cfg.conduct.search_tactics.enabled { "allowed under conditions" } else { "not allowed" },
         },
     });
     std::fs::write(out.join("rules.json"), serde_json::to_string_pretty(&rules)?)?;

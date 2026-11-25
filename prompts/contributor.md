@@ -36,7 +36,7 @@ Banned:
 
 {{protect_contributor}}
 
-Also banned, and checked by a reviewer: obfuscation, unreadable names, packing unrelated steps into one line, changes that make the build print new warnings (for example deleting an option that silences a linter instead of fixing what it reports), or anything that lowers the number without making the proof genuinely simpler.
+Also banned, and checked by a reviewer: obfuscation, unreadable names, packing unrelated steps into one line, changes that make the build print new warnings (for example deleting an option that silences a linter instead of fixing what it reports), or anything that lowers the number without making the proof genuinely simpler.{{conduct_contributor}}
 
 ## Before you open a pull request
 
@@ -49,7 +49,7 @@ Also banned, and checked by a reviewer: obfuscation, unreadable names, packing u
    - a hypothesis kept a name that described the old statement;
    - the counts in your description do not match the diff;
    - a line you added is over the length limit, or is broken in the middle of a factor or between a function and its argument.
-5. If you replaced explicit steps by automation, or inlined a lemma into a long proof, compare how long the file takes to compile before and after (several runs each, alternating). A shorter proof that is much slower is not accepted. Extra hypotheses left in scope can slow every later step; clear them.
+5. If you replaced explicit steps by automation, or inlined a lemma into a long proof, time the file before and after. Automation over nonlinear arithmetic is the usual cause of a slow file; so are extra hypotheses left in scope, which slow every later step: clear them.
 6. Run `hc eval` once more after your last edit: the static gates also cover the title format and line length.
 
 ## Submit

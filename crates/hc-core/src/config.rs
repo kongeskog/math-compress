@@ -26,6 +26,120 @@ pub struct Config {
     pub format: Format,
     #[serde(default)]
     pub limits: Limits,
+    #[serde(default)]
+    pub conduct: Conduct,
+}
+
+/// Rules a reviewer checks, stated in the prompts. No gate enforces them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Conduct {
+    /// A changed file may take at most this many percent longer to compile
+    /// than on the base branch. 0 states no limit.
+    pub max_slowdown_pct: u32,
+    pub search_tactics: SearchTactics,
+}
+
+impl Default for Conduct {
+    fn default() -> Self {
+        Conduct { max_slowdown_pct: 10, search_tactics: SearchTactics::default() }
+    }
+}
+
+/// Whether tactics that search for a proof may replace the end of a tactic
+/// block to save tokens, and under which conditions. Off unless an arena
+/// turns it on: it lowers the score by making proofs less explicit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SearchTactics {
+    pub enabled: bool,
+    pub tactics: Vec<String>,
+    /// At most this many such calls in one file.
+    pub max_per_file: u32,
+    /// Each place must save at least this many tokens.
+    pub min_saving: u64,
+    /// Files changed this way may take at most this many percent longer.
+    pub max_slowdown_pct: u32,
+}
+
+impl Default for SearchTactics {
+    fn default() -> Self {
+        SearchTactics {
+            enabled: false,
+            tactics: vec!["grind".into(), "simp_all".into()],
+            max_per_file: 10,
+            min_saving: 25,
+            max_slowdown_pct: 20,
+        }
+    }
+}
+
+impl Conduct {
+    fn tactic_list(&self) -> String {
+        self.search_tactics.tactics.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>().join(", ")
+    }
+
+    /// The time limit, as a sentence for contributors. Empty if there is none.
+    pub fn time_rule(&self, branch: &str) -> String {
+        if self.max_slowdown_pct == 0 {
+            return String::new();
+        }
+        format!(
+            "A file you changed may take at most {}% longer to compile than on `{branch}`. Where a proof changed in substance, time the file before and after (several runs of each, alternating; compare medians) and give the numbers in the description.",
+            self.max_slowdown_pct
+        )
+    }
+
+    /// The rule on search tactics, as a sentence for contributors.
+    pub fn search_rule(&self) -> String {
+        let st = &self.search_tactics;
+        if st.tactics.is_empty() {
+            return String::new();
+        }
+        if !st.enabled {
+            return format!(
+                "Do not replace explicit steps by a tactic that searches for the proof ({}) to save tokens. Such a call already in the proof may stay.",
+                self.tactic_list()
+            );
+        }
+        format!(
+            "A tactic that searches for the proof ({}) may replace the end of a tactic block only if all of these hold: there are at most {} such calls in the file; the place saves at least {} tokens; the file takes at most {}% longer to compile; no specific tactic closes the goal at similar length; and a one-line comment at the place says what the removed lines used (where they were a chain of inequalities, the comment gives the intermediate bound and where the final constant comes from).",
+            self.tactic_list(),
+            st.max_per_file,
+            st.min_saving,
+            st.max_slowdown_pct
+        )
+    }
+
+    /// Both rules as extra bullets for the reviewer's list of reasons to
+    /// request changes. Starts with a newline when not empty.
+    pub fn reviewer_bullets(&self) -> String {
+        let st = &self.search_tactics;
+        let mut out = String::new();
+        if self.max_slowdown_pct > 0 {
+            out.push_str(&format!(
+                "\n- Slower: a changed file takes more than {}% longer to compile than before, or a proof changed in substance and the description gives no timings.",
+                self.max_slowdown_pct
+            ));
+        }
+        if !st.tactics.is_empty() {
+            if st.enabled {
+                out.push_str(&format!(
+                    "\n- A search tactic ({}) outside its conditions: more than {} such calls in a file, a place that saves fewer than {} tokens, a file more than {}% slower, a specific tactic that would do, or a missing or inaccurate comment. Check each comment against the lines it replaced: it must say what they used, with names that are in scope there.",
+                    self.tactic_list(),
+                    st.max_per_file,
+                    st.min_saving,
+                    st.max_slowdown_pct
+                ));
+            } else {
+                out.push_str(&format!(
+                    "\n- Explicit steps replaced by a tactic that searches for the proof ({}).",
+                    self.tactic_list()
+                ));
+            }
+        }
+        out
+    }
 }
 
 /// Declarations that may be rewritten but never removed.
@@ -370,5 +484,25 @@ mod tests {
         assert!(f.parse_title("merge(Paper/Tree): tiny").is_none());
         assert!(f.parse_idea_title("Idea: merge(Nc/Tow): one statement for the Ever lemmas").is_some());
         assert!(f.parse_idea_title("merge(Nc/Tow): one statement for the Ever lemmas").is_none());
+    }
+
+    #[test]
+    fn conduct_rules() {
+        let mut c = Conduct::default();
+        assert!(c.time_rule("main").contains("10%"));
+        assert!(c.search_rule().starts_with("Do not replace"));
+        assert!(c.reviewer_bullets().contains("Explicit steps replaced"));
+        c.search_tactics.enabled = true;
+        assert!(c.search_rule().contains("at most 10 such calls"));
+        assert!(c.reviewer_bullets().contains("outside its conditions"));
+        c.max_slowdown_pct = 0;
+        c.search_tactics.tactics.clear();
+        assert!(c.time_rule("main").is_empty());
+        assert!(c.search_rule().is_empty());
+        assert!(c.reviewer_bullets().is_empty());
+        let parsed: Conduct = toml::from_str("[search_tactics]\nenabled = true\nmin_saving = 40").unwrap();
+        assert!(parsed.search_tactics.enabled);
+        assert_eq!(parsed.search_tactics.min_saving, 40);
+        assert_eq!(parsed.max_slowdown_pct, 10);
     }
 }

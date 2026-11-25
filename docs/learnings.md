@@ -98,6 +98,9 @@ proof are different projects.
 
 ## Rules that had to be added along the way
 
+The first three are now settings: `score.min_delta` and the `[conduct]` section of
+`hillclimb.toml`, which the prompts state and reviewers check.
+
 - **Elaboration time.** A token score rewards heavy automation. The arena settled on: a changed
   file may be at most a tenth slower than on main, measured by interleaved runs and medians.
 - **Closing tactics.** Search tactics may replace a tail only with: a limit per file, a minimum
