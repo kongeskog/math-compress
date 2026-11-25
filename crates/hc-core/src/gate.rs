@@ -198,6 +198,36 @@ fn names_an_idea(body: &str) -> bool {
         || idea_ref(body).is_some()
 }
 
+/// The format gate: the title follows the standard and the description names
+/// an idea. Also returns the parsed title (technique, scope, summary).
+pub fn format_check(
+    format: &crate::config::Format,
+    title: &str,
+    body: &str,
+) -> (Gate, Option<(String, String, String)>) {
+    let parsed = format.parse_title(title);
+    let mut problems = Vec::new();
+    if parsed.is_none() {
+        problems.push(format!("The title must be {}", format.title_help()));
+    }
+    if !names_an_idea(body) {
+        problems.push(
+            "The description must contain a line `Idea: #<number>` (one part of that idea), `Idea: #<number> (complete)` (this finishes it) or `Idea: none`"
+                .to_string(),
+        );
+    }
+    let gate = if problems.is_empty() {
+        Gate::new("format", GateStatus::Pass, "")
+    } else {
+        Gate::new(
+            "format",
+            GateStatus::Fail,
+            format!("{}. Edit the pull request; no new push is needed.", problems.join(". ")),
+        )
+    };
+    (gate, parsed)
+}
+
 fn key(pr: u64, sha: &str) -> String {
     format!("{pr}@{sha}")
 }
@@ -659,27 +689,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
 
     /// Title and description follow the standard. Editing them needs no new push.
     fn format_gate(&self, pr: &PullRequest) -> (Gate, Option<(String, String, String)>) {
-        let parsed = self.cfg.format.parse_title(&pr.title);
-        let mut problems = Vec::new();
-        if parsed.is_none() {
-            problems.push(format!("The title must be {}", self.cfg.format.title_help()));
-        }
-        if !names_an_idea(&pr.body) {
-            problems.push(
-                "The description must contain a line `Idea: #<number>` (one part of that idea), `Idea: #<number> (complete)` (this finishes it) or `Idea: none`"
-                    .to_string(),
-            );
-        }
-        let gate = if problems.is_empty() {
-            Gate::new("format", GateStatus::Pass, "")
-        } else {
-            Gate::new(
-                "format",
-                GateStatus::Fail,
-                format!("{}. Edit the pull request; no new push is needed.", problems.join(". ")),
-            )
-        };
-        (gate, parsed)
+        format_check(&self.cfg.format, &pr.title, &pr.body)
     }
 
     /// Verify `pr` on today's main with the approved changes ahead of it

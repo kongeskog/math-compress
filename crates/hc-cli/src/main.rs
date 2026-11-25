@@ -1,6 +1,8 @@
 mod gh;
 mod ops;
+mod precheck;
 mod render;
+mod timing;
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
@@ -141,6 +143,78 @@ enum Cmd {
         #[arg(long)]
         site: String,
     },
+    /// Time the compilation of changed files: in a built checkout of the base and in this one.
+    ///
+    /// Run from the changed checkout's repository root. For each file the
+    /// command runs once in each checkout's project directory untimed, then
+    /// `--runs` times in each, alternating (base, change, base, change, ...).
+    /// The report gives every run, both medians, the percentage change and
+    /// the limit that applies (`conduct.max_slowdown_pct`, or
+    /// `conduct.search_tactics.max_slowdown_pct` where the change adds a call
+    /// to a search tactic and the arena allows them), then the same as a
+    /// Markdown table for the pull request description.
+    ///
+    /// Nothing is built. Each file is compiled against the other files of its
+    /// own checkout as they were last built, so build both checkouts first
+    /// (`lake build` in the project directory); the command stops when a
+    /// checkout has no `.lake/build` and warns when modules are older than
+    /// their sources. A file that does not compile cannot be timed and makes
+    /// the exit code non-zero; being over the limit does not (timings are
+    /// noisy; a reviewer judges).
+    Time {
+        /// Files to time, relative to the repository root. Defaults to the
+        /// counted files that differ from the base ref; files that exist on
+        /// one side only are listed, not timed.
+        files: Vec<PathBuf>,
+        /// A built checkout of the base (its repository root).
+        #[arg(long)]
+        base: PathBuf,
+        /// Timed runs of each side, after one warm-up run of each.
+        #[arg(long, default_value_t = 3)]
+        runs: usize,
+        /// Run in each project directory; `{file}` is the path relative to it.
+        #[arg(long, default_value = "lake env lean {file}")]
+        command: String,
+        /// Only 1: two compilations at once disturb each other's timings.
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..=1))]
+        jobs: u64,
+        /// Print only the Markdown table.
+        #[arg(long)]
+        markdown: bool,
+        /// The changed checkout.
+        #[arg(long, default_value = ".")]
+        head: PathBuf,
+        /// Base ref for finding the changed files; defaults as for `hc eval`.
+        #[arg(long)]
+        base_ref: Option<String>,
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Everything to check before opening a pull request: `hc eval`, deleted
+    /// names still mentioned, added lines, open pull requests on the same
+    /// files, and the title and description.
+    Precheck {
+        /// The changed checkout.
+        #[arg(long, default_value = ".")]
+        head: PathBuf,
+        /// A checkout of the base. If omitted, `--base-ref` is exported from git.
+        #[arg(long)]
+        base: Option<PathBuf>,
+        /// Defaults as for `hc eval`.
+        #[arg(long)]
+        base_ref: Option<String>,
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Do not ask GitHub for open pull requests.
+        #[arg(long)]
+        offline: bool,
+        /// The pull request's title, checked with `--body-file` like the format gate.
+        #[arg(long)]
+        title: Option<String>,
+        /// A file holding the pull request's description.
+        #[arg(long)]
+        body_file: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -191,6 +265,19 @@ fn main() -> Result<()> {
         Cmd::Render { root, out, site } => {
             let cfg = Config::load(&root.join("hillclimb.toml"))?;
             render::site_files(&cfg, &out, &site)
+        }
+        Cmd::Time { files, base, runs, command, jobs: _, markdown, head, base_ref, config } => {
+            let c = compare(&head, None, base_ref, config)?;
+            timing::run(&head, &c, &timing::Options { files, base, runs, command, markdown })
+        }
+        Cmd::Precheck { head, base, base_ref, config, offline, title, body_file } => {
+            let c = compare(&head, base, base_ref, config)?;
+            let ok = precheck::run(&head, &c, &precheck::Options { offline, title, body_file })?;
+            drop(c);
+            if !ok {
+                std::process::exit(1);
+            }
+            Ok(())
         }
     }
 }
@@ -254,6 +341,99 @@ fn eval_cmd(
     author_open_prs: usize,
     out: Option<PathBuf>,
 ) -> Result<()> {
+    let c = compare(head, base, base_ref, config)?;
+    let (cfg, b, h) = (&c.cfg, &c.base, &c.head);
+    let mut gates = eval::static_gates(cfg, b, h)?;
+    if !author.is_empty() {
+        let exempt = cfg.roles.leaders.iter().any(|l| l.eq_ignore_ascii_case(author));
+        let limit = cfg.limits.max_open_prs;
+        gates.insert(
+            0,
+            if exempt || author_open_prs <= limit {
+                Gate::new("quota", GateStatus::Pass, "")
+            } else {
+                Gate::new(
+                    "quota",
+                    GateStatus::Fail,
+                    format!("{author} has {author_open_prs} open pull requests; the limit is {limit}. Close or finish one, then comment `/retry` here."),
+                )
+            },
+        );
+    }
+    let changed = eval::changed_paths(b, h).len();
+    let ok = report(&c, &gates);
+
+    if let Some(out) = out {
+        let result = VerifyResult {
+            pr,
+            head_sha,
+            base_sha,
+            base_tree: trees.0,
+            merged_tree: trees.1,
+            stack: trees.2,
+            metrics: h.metrics,
+            base_metrics: b.metrics,
+            gates,
+            changed_files: changed,
+            top_files: h.files.iter().take(30).cloned().collect(),
+            run_url: None,
+        };
+        std::fs::write(&out, serde_json::to_string_pretty(&result)?)?;
+    } else if !ok {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// A changed checkout and its base, both measured with the base's configuration.
+/// An exported base is removed when this is dropped.
+struct Compared {
+    cfg: Config,
+    base: eval::Measurement,
+    head: eval::Measurement,
+    /// The base's files: the `--base` checkout, or the export of the base ref.
+    base_dir: PathBuf,
+    temp: bool,
+}
+
+impl Drop for Compared {
+    fn drop(&mut self) {
+        if self.temp {
+            let _ = std::fs::remove_dir_all(&self.base_dir);
+        }
+    }
+}
+
+/// Print the metrics and each gate as `hc eval` does; true if no gate failed.
+fn report(c: &Compared, gates: &[Gate]) -> bool {
+    print_metrics(&c.head.metrics, Some(&c.base.metrics));
+    println!();
+    let mut ok = true;
+    for g in gates {
+        let mark = match g.status {
+            GateStatus::Pass => "pass",
+            GateStatus::Fail => {
+                ok = false;
+                "FAIL"
+            }
+            _ => "....",
+        };
+        println!("[{mark}] {} {}", g.label, g.detail.as_deref().map(|d| format!("- {d}")).unwrap_or_default());
+    }
+    println!(
+        "\n{}",
+        if ok {
+            "Static gates pass. The build and the proof check still have to pass in verification."
+        } else {
+            "Not acceptable as it stands."
+        }
+    );
+    ok
+}
+
+/// Find the base (a checkout, or the point this branch left the base ref)
+/// and measure both sides.
+fn compare(head: &Path, base: Option<PathBuf>, base_ref: Option<String>, config: Option<PathBuf>) -> Result<Compared> {
     let (base_dir, temp) = match base {
         Some(b) => (b, false),
         None => {
@@ -287,70 +467,8 @@ fn eval_cmd(
         let prefix = cfg.dir_prefix();
         let tracked = tracked_files(head);
         h.tree.retain(|p, _| b.tree.contains_key(p) || p.starts_with(&prefix) || tracked.contains(p));
-        let _ = std::fs::remove_dir_all(&base_dir);
     }
-    let mut gates = eval::static_gates(&cfg, &b, &h)?;
-    if !author.is_empty() {
-        let exempt = cfg.roles.leaders.iter().any(|l| l.eq_ignore_ascii_case(author));
-        let limit = cfg.limits.max_open_prs;
-        gates.insert(
-            0,
-            if exempt || author_open_prs <= limit {
-                Gate::new("quota", GateStatus::Pass, "")
-            } else {
-                Gate::new(
-                    "quota",
-                    GateStatus::Fail,
-                    format!("{author} has {author_open_prs} open pull requests; the limit is {limit}. Close or finish one, then comment `/retry` here."),
-                )
-            },
-        );
-    }
-    let changed = eval::changed_paths(&b, &h).len();
-
-    print_metrics(&h.metrics, Some(&b.metrics));
-    println!();
-    let mut ok = true;
-    for g in &gates {
-        let mark = match g.status {
-            GateStatus::Pass => "pass",
-            GateStatus::Fail => {
-                ok = false;
-                "FAIL"
-            }
-            _ => "....",
-        };
-        println!("[{mark}] {} {}", g.label, g.detail.as_deref().map(|d| format!("- {d}")).unwrap_or_default());
-    }
-    println!(
-        "\n{}",
-        if ok {
-            "Static gates pass. The build and the proof check still have to pass in verification."
-        } else {
-            "Not acceptable as it stands."
-        }
-    );
-
-    if let Some(out) = out {
-        let result = VerifyResult {
-            pr,
-            head_sha,
-            base_sha,
-            base_tree: trees.0,
-            merged_tree: trees.1,
-            stack: trees.2,
-            metrics: h.metrics,
-            base_metrics: b.metrics,
-            gates,
-            changed_files: changed,
-            top_files: h.files.iter().take(30).cloned().collect(),
-            run_url: None,
-        };
-        std::fs::write(&out, serde_json::to_string_pretty(&result)?)?;
-    } else if !ok {
-        std::process::exit(1);
-    }
-    Ok(())
+    Ok(Compared { cfg, base: b, head: h, base_dir, temp })
 }
 
 /// The arena's main branch as seen from this clone: the remote whose URL is
