@@ -385,6 +385,17 @@ impl Forge for GhForge {
         Ok(out)
     }
 
+    fn contains(&mut self, head: &str, ancestor: &str) -> Result<bool> {
+        if head == ancestor {
+            return Ok(true);
+        }
+        // `head` compared with `ancestor`: it contains it exactly when it is
+        // not behind it by any commit.
+        let v = self.get(&format!("compare/{ancestor}...{head}"))?;
+        let behind = v["behind_by"].as_u64().context("no `behind_by` in the comparison")?;
+        Ok(behind == 0)
+    }
+
     fn changed_files(&mut self, pr: u64) -> Result<Vec<String>> {
         let mut out = Vec::new();
         for f in self.list(&format!("pulls/{pr}/files?per_page=100"))? {

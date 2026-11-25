@@ -234,6 +234,10 @@ pub struct Attempt {
     /// first to merge first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends: Vec<u64>,
+    /// `pr@head_sha` of those changes as this commit is judged on top of
+    /// them: the commits the bot's comment names, and approvals are given under.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub judged_on: Vec<String>,
     /// `pr@head_sha` of the changes that were applied before this one in
     /// the verification the metrics and gates shown come from. Empty when
     /// they were measured against main alone.
@@ -356,12 +360,39 @@ pub struct Ledger {
     /// Issues that were already told their title or body is malformed.
     #[serde(default)]
     pub format_notified: std::collections::BTreeSet<u64>,
-    /// `pr@head_sha` -> the open pull requests that commit was judged on top
-    /// of (its `Depends` chain, the first to merge first). Kept so that the
-    /// line cannot be dropped or changed under a commit that was reviewed as
-    /// a change on top of another.
+    /// `pr@head_sha` -> when the gatekeeper first judged that commit and what
+    /// it judged it on top of. Only approvals given after that moment count,
+    /// so every counted approval was given under a bot comment whose
+    /// statement of what the commit is built on cannot change. A record is
+    /// kept while the pull request has not merged, also while it is a draft
+    /// or closed; a commit without a record is judged for the first time.
     #[serde(default)]
-    pub depends: BTreeMap<String, Vec<u64>>,
+    pub judged: BTreeMap<String, Judged>,
+    /// Notices already given on pull requests, so each is given once.
+    #[serde(default)]
+    pub told: std::collections::BTreeSet<String>,
+}
+
+/// How many records of judged commits the ledger keeps. Records of open pull
+/// requests are always kept; beyond this number the oldest others go. Losing
+/// one is safe: the commit is then judged anew and needs a new approval.
+pub const JUDGED_KEPT: usize = 2000;
+
+/// The gatekeeper's first judgement of one commit of a pull request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Judged {
+    /// When the statement below was first made for this commit. Approvals
+    /// submitted up to this moment do not count.
+    pub at: DateTime<Utc>,
+    /// `pr@head_sha` of the open changes the commit was judged on top of (its
+    /// `Depends` chain at their heads then), the first to merge first. Empty
+    /// for a change on main.
+    #[serde(default)]
+    pub on: Vec<String>,
+    /// Whether the commit contains the head of the change it is built on
+    /// directly (the last of `on`). `None` until that could be checked.
+    #[serde(default)]
+    pub contains: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

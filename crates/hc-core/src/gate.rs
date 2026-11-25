@@ -134,6 +134,8 @@ pub trait Forge {
     /// where it left `base`. For a change built on another one this is its
     /// own difference, without the other's files.
     fn changed_between(&mut self, base: &str, head: &str) -> Result<Vec<String>>;
+    /// Whether commit `ancestor` is `head` itself or one of its ancestors.
+    fn contains(&mut self, head: &str, ancestor: &str) -> Result<bool>;
     /// Stop the verifications of these changes that are queued or running.
     fn cancel_verifies(&mut self, prs: &BTreeSet<u64>) -> Result<()>;
     fn reviews(&mut self, pr: u64) -> Result<Vec<ReviewInfo>>;
@@ -295,8 +297,12 @@ fn short(sha: &str) -> &str {
 /// description (`Depends: none` is the same as no line). `Err` says what is
 /// wrong with the line.
 pub fn depends_ref(body: &str) -> std::result::Result<Option<u64>, String> {
+    // What is inside an HTML comment is not shown on the pull request, so it
+    // is not part of the description: a line hidden there says nothing. A
+    // comment that is never closed hides everything after it.
+    let visible = Regex::new(r"(?s)<!--.*?(?:-->|\z)").expect("static regex").replace_all(body, "\n");
     let re = Regex::new(r"(?im)^[ \t]*depends(?:[ \t]+on)?[ \t]*:(.*)$").expect("static regex");
-    let mut lines = re.captures_iter(body);
+    let mut lines = re.captures_iter(&visible);
     let Some(first) = lines.next() else { return Ok(None) };
     let usage = "The `Depends` line must be `Depends: #<number>`, naming the one open pull request this change is built on";
     if lines.next().is_some() {
@@ -442,7 +448,9 @@ pub fn section(body: &str, name: &str) -> Option<String> {
 /// 1500). A number written right after `#` names an issue and is skipped.
 /// Without `k` the decimal part is dropped.
 pub fn largest_number(text: &str) -> u64 {
-    let re = Regex::new(r"(#\s*)?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?\s?([kK]\b)?").expect("static regex");
+    // `[0-9]`, not `\d`: the latter also matches digits of other scripts,
+    // which do not parse as a number.
+    let re = Regex::new(r"(#\s*)?([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.([0-9]+))?\s?([kK]\b)?").expect("static regex");
     let mut max = 0u64;
     for c in re.captures_iter(text) {
         if c.get(1).is_some() {
@@ -662,6 +670,8 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         // built on one of them waits for it.
         let mut blocked: BTreeMap<u64, String> = BTreeMap::new();
         let reservations = self.reservations(ledger, &issues);
+        // `pr@head` of open changes that passed in a run about them alone.
+        let mut sound: BTreeSet<String> = BTreeSet::new();
 
         for pr in &prs {
             let id = key(pr.number, &pr.head_sha);
@@ -669,51 +679,108 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
             // is open the change is held: it is judged on top of it, can be
             // reviewed, and never merges.
             let mut dep = dependency(pr.number, &pr.body, &open_bodies, &landed, &self.cfg.project.branch);
-            if let Some(&was) = ledger.depends.get(&id).and_then(|c| c.last()) {
-                // This commit was judged, and perhaps approved, as a change on
-                // top of `was`. Its description cannot quietly turn it into a
-                // change on main that carries `was` along unreviewed.
-                //
-                // What this does not cover: the pin exists from the first pass
-                // that sees this commit with the line (and that pass must get
-                // as far as saving the ledger). If the line is removed before
-                // that, the commit was never pinned and is an ordinary change
-                // on main. That cannot merge an unapproved commit or an
-                // unverified tree: every gate is then evaluated against main
-                // for the whole branch, the other change's content included
-                // (also the file count behind the large-change rule), and the
-                // approval has to be for this very commit, which contains the
-                // other change's commits. What it can do is merge on an
-                // approval whose reviewer read the description with the line
-                // in the moments before the first pass, when the bot had not
-                // yet said "Depends on" and the pull request's diff showed
-                // both changes. Reviewers are told to read a change as a
-                // difference only when the bot's comment says so, and that
-                // comment is written in the pass that records the pin.
-                if dep.problem.is_none() && dep.direct != Some(was) && !landed.contains(&was) {
-                    dep = Dependency {
-                        direct: dep.direct,
-                        chain: Vec::new(),
-                        problem: Some(format!(
-                            "This commit was judged as a change on top of #{was}, so its `Depends: #{was}` line cannot be removed or changed without a new push (a review is for the commit as it was presented). Restore the line, or push a new commit"
-                        )),
-                    };
-                }
-            }
-            let chain = dep.chain.clone();
-            let held = !chain.is_empty();
-            // Remember the whole chain this commit was judged on, also after
-            // the front of it has merged.
-            if held && !ledger.depends.get(&id).is_some_and(|was| was.ends_with(&chain)) {
-                ledger.depends.insert(id.clone(), chain.clone());
-            }
-            let declared = ledger.depends.get(&id).cloned().unwrap_or_default();
-            // Whether everything in that chain is still open or has merged. If
-            // some of it was closed instead, a result that had it applied is
-            // about a tree that will never exist and decides nothing.
-            let declared_ok = declared.iter().all(|d| chain.contains(d) || landed.contains(d));
             let dep_keys: Vec<String> =
-                chain.iter().map(|n| key(*n, open_heads.get(n).copied().unwrap_or_default())).collect();
+                dep.chain.iter().map(|n| key(*n, open_heads.get(n).copied().unwrap_or_default())).collect();
+
+            // The record of this commit: when it was first judged, and on top
+            // of which commits of which changes. An approval counts only if
+            // it was given after that moment, so whoever gave it had the
+            // bot's statement of what the commit is built on before them, and
+            // that statement cannot change afterwards without the approvals
+            // being asked for again:
+            //  - no record: the commit is judged for the first time now;
+            //  - what it was judged on has merged, at exactly those commits:
+            //    nothing changed;
+            //  - something it was judged on merged as another commit: the
+            //    commit cannot merge any more (a new push is needed);
+            //  - the `Depends` line was removed or names another change while
+            //    what it named is unmerged: the same;
+            //  - what it is built on was pushed to, or a line was added: the
+            //    statement changes, and approvals given before do not count.
+            let key_number = |k: &String| k.split('@').next().and_then(|n| n.parse::<u64>().ok());
+            let key_sha = |k: &String| k.split_once('@').map(|(_, s)| s.to_string()).unwrap_or_default();
+            let fresh_record = || Judged { at: self.now, on: dep_keys.clone(), contains: None };
+            let record = match ledger.judged.get(&id).cloned() {
+                None => fresh_record(),
+                Some(was) => {
+                    // What it was judged on that has not merged as it was then.
+                    let pending: Vec<String> =
+                        was.on.iter().filter(|k| !merged_heads.contains_key(*k)).cloned().collect();
+                    let superseded = pending.iter().find(|k| key_number(k).is_some_and(|n| landed.contains(&n)));
+                    if pending == dep_keys {
+                        was
+                    } else if let Some(k) = superseded {
+                        let n = key_number(k).unwrap_or(0);
+                        let prefix = format!("{n}@");
+                        let merged = merged_heads.keys().find_map(|m| m.strip_prefix(&prefix)).unwrap_or_default();
+                        dep.chain.clear();
+                        dep.problem = Some(format!(
+                            "The change this was built on (#{n}) was revised before it merged: this commit was judged on top of `{}`, and `{}` is what merged. Merge `{}` into your branch and push; the new commit is judged against `{}` and needs a new approval",
+                            short(&key_sha(k)),
+                            short(merged),
+                            self.cfg.project.branch,
+                            self.cfg.project.branch
+                        ));
+                        was
+                    } else if dep.problem.is_some() {
+                        was
+                    } else if pending.is_empty() || pending.last().and_then(key_number) == dep.chain.last().copied() {
+                        fresh_record()
+                    } else {
+                        let n = pending.last().and_then(key_number).unwrap_or(0);
+                        dep.chain.clear();
+                        dep.problem = Some(format!(
+                            "This commit was judged as a change on top of #{n}, so its `Depends: #{n}` line cannot be removed or changed without a new push (a review is for the commit as it was presented). Restore the line, or push a new commit"
+                        ));
+                        was
+                    }
+                }
+            };
+            let chain = dep.chain.clone();
+            let dep_keys: Vec<String> = if chain.is_empty() { Vec::new() } else { dep_keys };
+            let held = !chain.is_empty();
+            // The commit must contain the head of what it is built on: then
+            // what it adds to that change is fixed by the commits themselves,
+            // and is what a reviewer of the difference read. If that change
+            // was pushed to and this branch does not have the new commit, a
+            // new commit is needed here, and with it a new approval.
+            let mut record = record;
+            if record.contains.is_none() {
+                record.contains = match record.on.last() {
+                    None => Some(true),
+                    Some(k) => self.forge.contains(&pr.head_sha, &key_sha(k)).ok(),
+                };
+            }
+            if record.contains == Some(false) && dep.problem.is_none() {
+                let k = record.on.last().cloned().unwrap_or_default();
+                let n = key_number(&k).unwrap_or(0);
+                let branch = &self.cfg.project.branch;
+                dep.problem = Some(if held {
+                    format!(
+                        "#{n}, which this is built on, is at `{}`, and this branch does not contain that commit. Merge #{n}'s branch into yours and push; the new commit needs a new approval",
+                        short(&key_sha(&k))
+                    )
+                } else {
+                    format!(
+                        "#{n}, which this was built on, merged as `{}`, and this branch does not contain that commit. Merge `{branch}` into your branch and push; the new commit needs a new approval",
+                        short(&key_sha(&k))
+                    )
+                });
+            }
+            // Could not be checked (the forge did not answer): nothing merges
+            // from this commit until it could.
+            let unchecked = record.contains.is_none();
+            let judged_at = record.at;
+            let declared: Vec<u64> = record.on.iter().filter_map(key_number).collect();
+            // Whether everything it was judged on is still open or has merged
+            // as it was then. If not, a result that had it applied is about a
+            // tree that will never exist and decides nothing.
+            let declared_ok = record.on.iter().all(|k| dep_keys.contains(k) || merged_heads.contains_key(k));
+            ledger.judged.insert(id.clone(), record);
+            // A failure of this change's build decides something only if
+            // everything it is built on has passed on its own at the commit
+            // that was applied; until then the failure may be theirs.
+            let chain_sound = dep_keys.iter().all(|k| sound.contains(k));
             // Whether everything it is built on is approved and in the line
             // (trivially so for a change built on nothing).
             let in_line = chain.iter().all(|d| ahead.contains(d));
@@ -765,17 +832,42 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
             let lands = |r: &VerifyResult| {
                 lands_as_verified(r) && (declared.is_empty() || r.stack.is_empty() || r.landing_tree.is_some())
             };
-            // Held changes have no result to merge from, whatever its tree.
-            let fresh_result = if held { None } else { results.iter().find(|r| is_fresh(r) && lands(r)) };
+            // Held changes have no result to merge from, whatever its tree; nor
+            // has a commit of which it is not known whether it contains what
+            // it was built on.
+            let fresh_result =
+                if held || unchecked { None } else { results.iter().find(|r| is_fresh(r) && lands(r)) };
             let fresh = fresh_result.is_some();
             // Verified on exactly today's main, but this branch would land as another tree.
-            let diverged = !held && !fresh && results.iter().any(|r| is_fresh(r));
+            let diverged = !held && !unchecked && !fresh && results.iter().any(|r| is_fresh(r));
+            let result = fresh_result.or(results.iter().find(|r| own(r))).or(results.first()).cloned();
+            // A held change's result that does not pass, while something it is
+            // built on has not passed on its own at the commit that was
+            // applied: the failure may be that change's, so nothing is decided.
+            let undecided = held
+                && result.as_ref().is_some_and(|r| {
+                    !(chain_sound && dep_keys.iter().all(|k| r.stack.contains(k)))
+                        && r.gates.iter().any(|g| g.status != GateStatus::Pass)
+                });
             let speculative_only = !fresh
                 && !results.is_empty()
-                && (dep_blocked.is_some() || !results.iter().any(|r| own(r)));
-            let result = fresh_result.or(results.iter().find(|r| own(r))).or(results.first()).cloned();
+                && (dep_blocked.is_some() || undecided || !results.iter().any(|r| own(r)));
             let changed = result.as_ref().map(|r| r.changed_files).unwrap_or(0);
-            let review = self.review_gate(pr, roles, changed)?;
+            let (review, early) = self.review_gate(pr, roles, changed, judged_at)?;
+            // An approval given before this commit was first judged does not
+            // count. Its reviewer is told once, so that nobody waits.
+            for user in &early {
+                if ledger.told.insert(format!("{id}@early@{}", user.to_lowercase())) {
+                    self.forge.comment(
+                        pr.number,
+                        &format!(
+                            "@{user} your approval of `{}` does not count: it was given before the gatekeeper had judged this commit as it stands now (before its first check, or before a change it is built on was pushed to). The comment above now says what the commit is judged against. If your approval still holds, give it again: `/approve {}`.",
+                            short(&pr.head_sha),
+                            pr.head_sha
+                        ),
+                    )?;
+                }
+            }
             let (format, parsed) = self.format_gate(pr, dep.problem.as_deref());
             let format_ok = format.status == GateStatus::Pass;
             let mut attempt = self.attempt(pr, result.as_ref());
@@ -784,6 +876,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 attempt.scope = Some(scope);
             }
             attempt.depends = chain.clone();
+            attempt.judged_on = dep_keys.clone();
             attempt.waiver = waiver.clone();
             attempt.warnings = self.reservation_warnings(pr, &reservations, &chain, &prs, roles.bootstrap);
 
@@ -914,6 +1007,10 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                         // Its build had that change applied first, so a
                         // failure may be that change's and decides nothing.
                         Some(why) => format!("Not decided while it is built on {why}"),
+                        None if undecided => format!(
+                            "Not decided: the run with {} applied first did not pass, and that has not passed on its own at the commit that was applied, so the failure may not be this change's",
+                            refs(&chain)
+                        ),
                         None => "Verified only together with changes queued ahead of it".into(),
                     });
                 }
@@ -977,6 +1074,10 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 self.forge.set_label(pr.number, LABEL_REJECTED, false)?;
             }
             let approved = review.status == GateStatus::Pass;
+            if !speculative_only {
+                // This commit passed in a run that was about it alone.
+                sound.insert(id.clone());
+            }
 
             if !fresh {
                 let ready = approved && format_ok;
@@ -988,19 +1089,31 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 let detail = if let Some(why) = &dep_blocked {
                     text = "Waiting for the change it is built on".into();
                     format!("Built on {why}. Nothing more happens here until that is repaired; this change cannot merge before it")
+                } else if undecided {
+                    text = format!("Waiting for {} to pass on its own", refs(&chain));
+                    format!(
+                        "Nothing is decided yet: the run with {} applied first did not pass, and that has not passed on its own. This change is judged when it has",
+                        refs(&chain)
+                    )
+                } else if unchecked {
+                    text = "Waiting: could not check what this branch contains".into();
+                    "Could not check that this branch contains the commit of the change it was built on; nothing merges from it until that is known. It is tried again on the next pass".to_string()
                 } else if let Some(d) = revised {
+                    // The branch contains the new head (otherwise the format
+                    // gate has already said to merge it in), so only the
+                    // verification and the approvals are out of date.
                     let prefix = format!("{d}@");
                     let then = result.stack.iter().find_map(|k| k.strip_prefix(&prefix)).unwrap_or_default();
                     let now = open_heads.get(&d).copied().unwrap_or_default();
                     text = format!("#{d}, which it is built on, was revised");
                     format!(
-                        "Out of date: #{d} was revised after this was verified on top of it (`{}` then, `{}` now). {} If it no longer applies there, merge #{d}'s branch into yours and push; an approval is for one commit and must then be given again",
+                        "Out of date: #{d} was pushed to after this was verified on top of it (`{}` then, `{}` now, which this branch contains). Approvals given before that push do not count and must be given again. {}",
                         short(then),
                         short(now),
                         if ready {
-                            "It is being verified again on the new commit, and nothing is needed from you if that passes."
+                            "It is being verified again on the new commit"
                         } else {
-                            "It is verified again on the new commit once it is approved; to have it judged now, merge that branch into yours and push."
+                            "It is verified again on the new commit once it is approved"
                         }
                     )
                 } else if held {
@@ -1034,7 +1147,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 gates.push(review);
                 attempt.gates = gates;
                 attempt.status = status;
-                if ready && in_line && dep_blocked.is_none() {
+                if ready && in_line && dep_blocked.is_none() && !unchecked {
                     // Verify on top of the approved changes ahead of this one,
                     // so the whole line can merge without a rebuild per merge.
                     // It is dispatched at once, in order, even while an older run
@@ -1052,7 +1165,11 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                         queued_now.insert(pr.number);
                     }
                     ahead.push(pr.number);
-                } else if held && dep_blocked.is_none() && (speculative_only || (revised.is_some() && ready)) {
+                } else if held
+                    && dep_blocked.is_none()
+                    && !undecided
+                    && (speculative_only || (revised.is_some() && ready))
+                {
                     // Out of the line: verified on main and exactly what it is
                     // built on, once per commit of each.
                     let k = format!("{id}@on@{}", dep_keys.join("+"));
@@ -1191,7 +1308,27 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         ledger.dispatched.retain(|k, _| open_numbers.iter().any(|p| k.starts_with(p)));
         ledger.lines.retain(|k, _| open_numbers.iter().any(|p| k.starts_with(p)));
         ledger.line_bases.retain(|k, _| open_numbers.iter().any(|p| k.starts_with(p)));
-        ledger.depends.retain(|k, _| open_numbers.iter().any(|p| k.starts_with(p)));
+        ledger.told.retain(|k| open_numbers.iter().any(|p| k.starts_with(p)));
+        // The record of a judged commit is not dropped because its pull
+        // request is missing from a pass: a draft, a closed or a retargeted
+        // pull request can come back with the same commit, and what that
+        // commit was judged on must still hold then. It goes when the pull
+        // request has merged. Beyond `JUDGED_KEPT` records, the oldest ones
+        // of pull requests that are not open go too; a commit whose record is
+        // gone is judged for the first time when it is seen again, and
+        // approvals given before that do not count, so losing one is safe.
+        let number_of = |k: &String| k.split('@').next().and_then(|n| n.parse::<u64>().ok());
+        ledger.judged.retain(|k, _| !number_of(k).is_some_and(|n| landed.contains(&n)));
+        if ledger.judged.len() > JUDGED_KEPT {
+            let is_open = |k: &String| open_numbers.iter().any(|p| k.starts_with(p));
+            let mut closed: Vec<(DateTime<Utc>, String)> =
+                ledger.judged.iter().filter(|(k, _)| !is_open(k)).map(|(k, j)| (j.at, k.clone())).collect();
+            closed.sort();
+            let excess = ledger.judged.len() - JUDGED_KEPT;
+            for (_, k) in closed.into_iter().take(excess) {
+                ledger.judged.remove(&k);
+            }
+        }
 
         // A merged change needs no more verification: stop what is still
         // running for it, so the runners go to the changes that wait.
@@ -1241,6 +1378,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
             technique: None,
             scope: None,
             depends: Vec::new(),
+            judged_on: Vec::new(),
             measured_on: Vec::new(),
             warnings: Vec::new(),
             waiver: None,
@@ -1349,7 +1487,9 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 continue;
             }
             let sha = cmd.get(1).map(String::as_str).unwrap_or("");
-            if sha.len() < 7 || !pr.head_sha.starts_with(sha) || cmd.len() < 3 {
+            // The commit in full, as for an approval: a prefix could be
+            // inherited by another commit pushed later.
+            if !sha.eq_ignore_ascii_case(&pr.head_sha) || cmd.len() < 3 {
                 continue;
             }
             found = Some(Waiver { by: c.user, reason: cmd[2..].join(" ") });
@@ -1403,14 +1543,28 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
             // its own difference is asked for: from the head of what it is
             // built on to its own head. If that cannot be had, the full list
             // is used and the warning says so.
-            let (files, own) = files.get_or_insert_with(|| {
+            if files.is_none() {
                 let on = chain.last().and_then(|d| prs.iter().find(|p| p.number == *d));
-                match on.map(|p| self.forge.changed_between(&p.head_sha, &pr.head_sha)) {
-                    Some(Ok(own)) => (own, true),
-                    None => (self.forge.changed_files(pr.number).unwrap_or_default(), true),
-                    Some(Err(_)) => (self.forge.changed_files(pr.number).unwrap_or_default(), false),
+                let between = on.map(|p| self.forge.changed_between(&p.head_sha, &pr.head_sha));
+                let own = !matches!(between, Some(Err(_)));
+                let list = match between {
+                    Some(Ok(list)) => Ok(list),
+                    _ => self.forge.changed_files(pr.number),
+                };
+                match list {
+                    Ok(list) => files = Some((list, own)),
+                    Err(_) => {
+                        // The files could not be read. Say so instead of
+                        // staying silent: no warning would look like no overlap.
+                        out.push(format!(
+                            "the check for files reserved by claimed ideas ({}) could not be made, because the files this change touches could not be read; it is tried again on the next pass",
+                            refs(&reservations.iter().map(|r| r.idea).collect::<Vec<_>>())
+                        ));
+                        break;
+                    }
                 }
-            });
+            }
+            let Some((files, own)) = files.as_ref() else { break };
             let hits = reserved_hits(&self.cfg.dir_prefix(), &r.patterns, files);
             if !hits.is_empty() {
                 let mut warning = reservation_warning(r, &hits);
@@ -1515,19 +1669,32 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
     /// Approvals count only from vetted reviewers and leaders. A verdict is
     /// either a GitHub review or a comment `/approve <commit>` or
     /// `/request-changes`; the latest verdict of each reviewer wins.
-    fn review_gate(&mut self, pr: &PullRequest, roles: &RolesState, changed_files: usize) -> Result<Gate> {
+    ///
+    /// An approval names the commit in full: a prefix could also be the
+    /// prefix of another commit pushed later. And it counts only if it was
+    /// given after `since`, the moment the gatekeeper first judged the commit
+    /// as it stands; the reviewers whose approval of the head came earlier
+    /// are returned so that they can be told.
+    fn review_gate(
+        &mut self,
+        pr: &PullRequest,
+        roles: &RolesState,
+        changed_files: usize,
+        since: DateTime<Utc>,
+    ) -> Result<(Gate, Vec<String>)> {
         let r = &self.cfg.review;
         let needed = if changed_files > r.large_change_files { r.required_large } else { r.required };
         if needed == 0 {
-            return Ok(Gate::new("review", GateStatus::Pass, "No review required"));
+            return Ok((Gate::new("review", GateStatus::Pass, "No review required"), Vec::new()));
         }
+        let mut early: Vec<String> = Vec::new();
         let mut verdicts = self.forge.reviews(pr.number)?;
         for c in self.forge.pr_comments(pr.number)? {
             let cmd = command(&c.body);
             match cmd.first().map(String::as_str) {
                 Some("/approve") => {
                     let sha = cmd.get(1).map(String::as_str).unwrap_or("");
-                    let current = sha.len() >= 7 && pr.head_sha.starts_with(sha);
+                    let current = sha.eq_ignore_ascii_case(&pr.head_sha);
                     verdicts.push(ReviewInfo {
                         user: c.user,
                         state: "APPROVED".into(),
@@ -1555,6 +1722,12 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
             let bootstrap_own = own && roles.bootstrap && roles.is_leader(&v.user);
             let eligible = roles.can_review(&v.user) && (!own || bootstrap_own);
             let user = v.user.to_lowercase();
+            if v.state == "APPROVED" && v.commit_id == pr.head_sha && v.submitted_at <= since {
+                if eligible && !early.iter().any(|e| e.eq_ignore_ascii_case(&v.user)) {
+                    early.push(v.user.clone());
+                }
+                continue;
+            }
             match v.state.as_str() {
                 // In that phase separate reviews by separate agents arrive
                 // from the one account, so each approval is its own verdict;
@@ -1592,18 +1765,19 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 approvals.push(v.user.clone());
             }
         }
+        // A reviewer who has approved again since is not told anything.
+        early.retain(|e| !approvals.iter().any(|a| a.eq_ignore_ascii_case(e)));
         if !blocking.is_empty() {
-            return Ok(Gate::new(
-                "review",
-                GateStatus::Fail,
-                format!("Changes requested by {}", blocking.join(", ")),
+            return Ok((
+                Gate::new("review", GateStatus::Fail, format!("Changes requested by {}", blocking.join(", "))),
+                early,
             ));
         }
         if approvals.len() as u32 >= needed {
             let own = approvals.iter().any(|a| a.eq_ignore_ascii_case(&pr.author));
             let count = approvals.len();
             approvals.dedup();
-            return Ok(Gate::new(
+            return Ok((Gate::new(
                 "review",
                 GateStatus::Pass,
                 format!(
@@ -1615,11 +1789,18 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                         String::new()
                     }
                 ),
-            ));
+            ), early));
         }
         let mut detail = format!("{} of {} approvals from vetted reviewers", approvals.len(), needed);
         if outdated > 0 {
             detail.push_str(&format!("; {outdated} approval(s) are for an older commit"));
+        }
+        if !early.is_empty() {
+            detail.push_str(&format!(
+                "; the approval(s) by {} were given before the gatekeeper had judged this commit as it stands (see what it is judged against above) and must be given again: `/approve {}`",
+                early.join(", "),
+                pr.head_sha
+            ));
         }
         if !unvetted.is_empty() {
             detail.push_str(&format!(
@@ -1627,7 +1808,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 unvetted.into_iter().collect::<Vec<_>>().join(", ")
             ));
         }
-        Ok(Gate::new("review", GateStatus::Pending, detail))
+        Ok((Gate::new("review", GateStatus::Pending, detail), early))
     }
 
     /// Slash commands in new comments: claims, triage, applications, roles, retries.
@@ -1880,6 +2061,25 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                         log.push(format!("#{n}: retry requested by {}", c.user));
                     }
                 }
+                "/approve" => {
+                    // The approval itself is read in the review gate. This
+                    // only answers a reviewer who named the head commit by a
+                    // short hash, which does not count, with the line to use.
+                    let Some(pr) = prs.iter().find(|p| p.number == n) else { continue };
+                    let sha = cmd.get(1).map(String::as_str).unwrap_or("");
+                    let short_form = sha.len() >= 4
+                        && sha.len() < pr.head_sha.len()
+                        && pr.head_sha.to_lowercase().starts_with(&sha.to_lowercase());
+                    if short_form && roles.can_review(&c.user) {
+                        self.forge.comment(
+                            n,
+                            &format!(
+                                "@{} that approval does not count: it names the commit by a short hash, which another commit could share. Name it in full: `/approve {}`.",
+                                c.user, pr.head_sha
+                            ),
+                        )?;
+                    }
+                }
                 "/waive-min" if leader => {
                     // The waiver itself is read from the pull request's
                     // comments in every pass, as approvals are; this only
@@ -1887,18 +2087,18 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                     let Some(pr) = prs.iter().find(|p| p.number == n) else { continue };
                     let sha = cmd.get(1).map(String::as_str).unwrap_or("");
                     let own = pr.author.eq_ignore_ascii_case(&c.user);
-                    let head = short(&pr.head_sha);
+                    let head = pr.head_sha.as_str();
                     let primary = &self.cfg.score.primary;
                     if own && !roles.bootstrap {
                         self.forge.comment(
                             n,
                             &format!("@{} a leader cannot waive the minimum for a change from their own account.", c.user),
                         )?;
-                    } else if sha.len() < 7 || !pr.head_sha.starts_with(sha) || cmd.len() < 3 {
+                    } else if !sha.eq_ignore_ascii_case(head) || cmd.len() < 3 {
                         self.forge.comment(
                             n,
                             &format!(
-                                "@{} no waiver was recorded. Usage: `/waive-min {head} <reason>`: the head commit the waiver is for, then why this change is worth a review and a build below the minimum of {} {primary}. Like an approval, a waiver is for one commit.",
+                                "@{} no waiver was recorded. Usage: `/waive-min {head} <reason>`: the head commit the waiver is for, written in full (a short hash is not accepted), then why this change is worth a review and a build below the minimum of {} {primary}. Like an approval, a waiver is for one commit.",
                                 c.user, self.cfg.score.min_delta
                             ),
                         )?;
@@ -2095,8 +2295,10 @@ pub fn render_comment(cfg: &Config, a: &Attempt) -> String {
         GateStatus::Skip => "➖",
     };
     let format_failed = a.gates.iter().any(|g| g.key == "format" && g.status == GateStatus::Fail);
-    let head = short(&a.head_sha);
+    // In full: an approval or a waiver that names the commit by a prefix does not count.
+    let head = a.head_sha.as_str();
     let on_top = refs(&a.depends);
+    let after = " An approval counts only if it is given after this comment first appeared for the commit; an earlier one has to be given again.";
     let headline = match a.status {
         AttemptStatus::Verifying if !a.depends.is_empty() => {
             format!("Verification on top of {on_top} is pending or running.")
@@ -2106,10 +2308,10 @@ pub fn render_comment(cfg: &Config, a: &Attempt) -> String {
             "The checks passed, but the title or description does not follow the standard. Edit the pull request; no new push is needed.".to_string()
         }
         AttemptStatus::AwaitingReview if !a.depends.is_empty() => format!(
-            "All automatic gates passed on top of {on_top}. Waiting for a vetted reviewer, who reads this change as the difference from {on_top} and approves with a review or the comment `/approve {head}`. It merges only after {on_top} merged."
+            "All automatic gates passed on top of {on_top}. Waiting for a vetted reviewer, who reads this change as the difference from {on_top} and approves with a review or the comment `/approve {head}`. It merges only after {on_top} merged.{after}"
         ),
         AttemptStatus::AwaitingReview => format!(
-            "All automatic gates passed. Waiting for a vetted reviewer, who approves with a review or the comment `/approve {head}`."
+            "All automatic gates passed. Waiting for a vetted reviewer, who approves with a review or the comment `/approve {head}`.{after}"
         ),
         AttemptStatus::Stale if !a.depends.is_empty() => {
             format!("Waiting for {on_top}, which this change is built on.")
@@ -2150,6 +2352,20 @@ pub fn render_comment(cfg: &Config, a: &Attempt) -> String {
             if a.depends.len() == 1 { "it" } else { "them" },
             if a.depends.len() == 1 { "it" } else { "them" },
         ));
+        if !a.judged_on.is_empty() {
+            let at: Vec<String> = a
+                .judged_on
+                .iter()
+                .map(|k| match k.split_once('@') {
+                    Some((n, sha)) => format!("#{n} at `{sha}`"),
+                    None => k.clone(),
+                })
+                .collect();
+            s.push_str(&format!(
+                "It is judged on top of {}, which this branch must contain. If that is pushed to, this branch has to take the new commit in, and approvals given before do not count.\n\n",
+                at.join(", ")
+            ));
+        }
     }
     if let Some(w) = &a.waiver {
         s.push_str(&format!(
@@ -2263,6 +2479,21 @@ mod tests {
         waived: Vec<(u64, u64)>,
         /// Text of the latest commit status of each head.
         status_text: BTreeMap<String, String>,
+        /// (head, commit) pairs where the head does not contain the commit.
+        /// A branch contains whatever is not listed here.
+        lacks: BTreeSet<(String, String)>,
+        /// Names of forge calls that fail: `dispatch_verify_min`,
+        /// `changed_files`, `changed_between`, `contains`.
+        failing: BTreeSet<&'static str>,
+    }
+
+    impl Mock {
+        fn fail(&self, call: &'static str) -> Result<()> {
+            if self.failing.contains(call) {
+                anyhow::bail!("{call}: the forge did not answer");
+            }
+            Ok(())
+        }
     }
 
     impl Forge for Mock {
@@ -2304,14 +2535,21 @@ mod tests {
             Ok(())
         }
         fn dispatch_verify_min(&mut self, pr: u64, stack: &[u64], min_delta: u64) -> Result<()> {
+            self.fail("dispatch_verify_min")?;
             self.waived.push((pr, min_delta));
             self.dispatch_verify(pr, stack)
         }
         fn changed_files(&mut self, pr: u64) -> Result<Vec<String>> {
+            self.fail("changed_files")?;
             Ok(self.files.get(&pr).cloned().unwrap_or_default())
         }
         fn changed_between(&mut self, base: &str, head: &str) -> Result<Vec<String>> {
+            self.fail("changed_between")?;
             self.between.get(&(base.to_string(), head.to_string())).cloned().ok_or_else(|| anyhow::anyhow!("not known"))
+        }
+        fn contains(&mut self, head: &str, ancestor: &str) -> Result<bool> {
+            self.fail("contains")?;
+            Ok(!self.lacks.contains(&(head.to_string(), ancestor.to_string())))
         }
         fn cancel_verifies(&mut self, prs: &BTreeSet<u64>) -> Result<()> {
             self.cancelled.extend(prs);
@@ -2340,7 +2578,9 @@ mod tests {
         }
         fn merge(&mut self, pr: &PullRequest, _: &str) -> Result<String> {
             self.merged.push(pr.number);
-            self.main = format!("merge{}", pr.number);
+            // Main's commit, and with it its tree, depends on what merged:
+            // the pull request and the commit that was its head.
+            self.main = landed_at(pr.number, &pr.head_sha);
             Ok(self.main.clone())
         }
         fn issues(&mut self) -> Result<Vec<IssueInfo>> {
@@ -2386,6 +2626,35 @@ mod tests {
         format!("head{n}abcdef")
     }
 
+    /// Main's commit after pull request `n` merged with head `sha`.
+    fn landed_at(n: u64, sha: &str) -> String {
+        format!("merge{n}@{sha}")
+    }
+
+    /// Main's commit after pull request `n` merged with its usual head.
+    fn landed(n: u64) -> String {
+        landed_at(n, &head(n))
+    }
+
+    /// Main's tree after pull request `n` merged with its usual head.
+    fn after(n: u64) -> String {
+        format!("tree:{}", landed(n))
+    }
+
+    /// The same result for another head commit of the pull request: what
+    /// it leaves on main is another tree.
+    fn at_head(mut r: VerifyResult, sha: &str) -> VerifyResult {
+        let tree = Some(format!("tree:{}", landed_at(r.pr, sha)));
+        if r.landing_tree == r.merged_tree {
+            r.landing_tree = tree.clone();
+        }
+        if r.merged_tree.is_some() {
+            r.merged_tree = tree;
+        }
+        r.head_sha = sha.into();
+        r
+    }
+
     fn result(n: u64, base: &str, tokens: u64, pass: bool) -> VerifyResult {
         let gate = |k: &str, ok: bool| Gate::new(k, if ok { GateStatus::Pass } else { GateStatus::Fail }, "");
         VerifyResult {
@@ -2413,8 +2682,20 @@ mod tests {
         }
     }
 
+    /// When reviews and comments are made in these tests unless a test says
+    /// otherwise: a minute after the pass at `t(0)`, so after the gatekeeper
+    /// has first judged a commit it sees in that pass. (An approval given
+    /// before that does not count; `approve_at` makes one.)
+    fn soon(h: i64) -> DateTime<Utc> {
+        t(h) + Duration::minutes(1)
+    }
+
     fn approve(user: &str, commit: &str) -> ReviewInfo {
-        ReviewInfo { user: user.into(), state: "APPROVED".into(), commit_id: commit.into(), submitted_at: t(0) }
+        ReviewInfo { user: user.into(), state: "APPROVED".into(), commit_id: commit.into(), submitted_at: soon(0) }
+    }
+
+    fn approve_at(user: &str, commit: &str, at: DateTime<Utc>) -> ReviewInfo {
+        ReviewInfo { submitted_at: at, ..approve(user, commit) }
     }
 
     /// Roles as they stand in most tests: `lead` leads, `bob` reviews.
@@ -2432,6 +2713,11 @@ mod tests {
         run_with(m, &cfg(), ledger, &mut roles(), past)
     }
 
+    /// A pass at another time than `t(0)`.
+    fn run_at(m: &mut Mock, ledger: &mut Ledger, past: &[Attempt], now: DateTime<Utc>) -> Outcome {
+        Gatekeeper { cfg: &cfg(), forge: m, now }.run(ledger, &mut roles(), past).unwrap()
+    }
+
     fn base() -> Mock {
         Mock { main: "m0".into(), ..Default::default() }
     }
@@ -2445,7 +2731,7 @@ mod tests {
     }
 
     fn says(issue: u64, user: &str, body: &str, h: i64) -> CommentInfo {
-        CommentInfo { issue, user: user.into(), body: body.into(), created_at: t(h) }
+        CommentInfo { issue, user: user.into(), body: body.into(), created_at: soon(h) }
     }
 
     fn merged_attempt(author: &str) -> Attempt {
@@ -2506,9 +2792,46 @@ mod tests {
         run(&mut m, &mut Ledger::default(), &[]);
         assert!(m.merged.is_empty());
 
-        m.pr_comments.insert(1, vec![says(1, "bob", "Looks right.\n/approve head1ab", 0)]);
+        // A prefix of the head commit is not the commit: the author could
+        // push another commit with the same prefix and inherit the approval.
+        // The reviewer is told the line to use.
+        for short in ["head1ab", "head1abcde"] {
+            let approval = says(1, "bob", &format!("Looks right.\n/approve {short}"), 0);
+            m.pr_comments.insert(1, vec![approval.clone()]);
+            m.comments = vec![approval];
+            m.posted.clear();
+            run(&mut m, &mut Ledger::default(), &[]);
+            assert!(m.merged.is_empty(), "{short}");
+            assert!(m.posted.iter().any(|(n, b)| *n == 1 && b.contains("Name it in full: `/approve head1abcdef`")), "{short}");
+        }
+        // Someone whose approval would not count anyway gets no answer.
+        m.comments = vec![says(1, "mallory", "/approve head1ab", 0)];
+        m.posted.clear();
+        run(&mut m, &mut Ledger::default(), &[]);
+        assert!(m.posted.is_empty());
+
+        m.pr_comments.insert(1, vec![says(1, "bob", "Looks right.\n/approve head1abcdef", 0)]);
+        m.comments.clear();
         run(&mut m, &mut Ledger::default(), &[]);
         assert_eq!(m.merged, [1]);
+        assert!(m.posted.is_empty());
+    }
+
+    #[test]
+    fn a_commit_that_shares_a_prefix_does_not_inherit_an_approval_or_a_waiver() {
+        // Approved and waived by prefix for one commit; the author pushes
+        // another commit whose hash starts the same way.
+        let mut m = small();
+        m.prs[0].head_sha = "head1abzzzz".into();
+        m.extra_results.push(at_head(waived_result(&head(1)), "head1abzzzz"));
+        m.pr_comments.insert(
+            1,
+            vec![says(1, "bob", "/approve head1ab", 0), says(1, "lead", "/waive-min head1ab small but right", 0)],
+        );
+        let out = run(&mut m, &mut Ledger::default(), &[]);
+        assert!(m.merged.is_empty());
+        assert!(out.open[0].waiver.is_none());
+        assert_eq!(gate_of(&out.open[0], "review").status, GateStatus::Pending);
     }
 
     #[test]
@@ -2739,8 +3062,8 @@ mod tests {
 
         // The whole line was verified as a train and merges in one pass.
         m.extra_results.push(on_tree(1, "tree:m0", &[], true));
-        m.extra_results.push(on_tree(2, "tree:merge1", &["1@head1abcdef"], true));
-        m.extra_results.push(on_tree(3, "tree:merge2", &["1@head1abcdef", "2@head2abcdef"], true));
+        m.extra_results.push(on_tree(2, &after(1), &["1@head1abcdef"], true));
+        m.extra_results.push(on_tree(3, &after(2), &["1@head1abcdef", "2@head2abcdef"], true));
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.merged, [1, 2, 3]);
     }
@@ -2774,7 +3097,7 @@ mod tests {
 
         m.active.extend([1, 2]);
         m.extra_results.push(on_tree(1, "tree:m0", &[], true));
-        m.extra_results.push(on_tree(2, "tree:merge1", &["1@head1abcdef"], true));
+        m.extra_results.push(on_tree(2, &after(1), &["1@head1abcdef"], true));
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.merged, [1, 2]);
     }
@@ -2827,7 +3150,7 @@ mod tests {
         let mut m = two_stale();
         let mut ledger = Ledger::default();
         run(&mut m, &mut ledger, &[]);
-        m.extra_results.push(on_tree(2, "tree:merge1", &["1@head1abcdef"], true));
+        m.extra_results.push(on_tree(2, &after(1), &["1@head1abcdef"], true));
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.dispatched.len(), 2, "nothing to do until #1's result is in");
 
@@ -2837,7 +3160,7 @@ mod tests {
         m.reviews.insert(3, vec![approve("bob", &head(3))]);
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.stacks.last().unwrap(), &vec![1, 2]);
-        m.extra_results.push(on_tree(3, "tree:merge2", &["1@head1abcdef", "2@head2abcdef"], true));
+        m.extra_results.push(on_tree(3, &after(2), &["1@head1abcdef", "2@head2abcdef"], true));
         m.extra_results.push(on_tree(1, "tree:m0", &[], true));
         m.extra_results.retain(|r| r.pr != 2);
         m.active.insert(2);
@@ -2870,7 +3193,7 @@ mod tests {
     fn on_tree(n: u64, base_tree: &str, stack: &[&str], pass: bool) -> VerifyResult {
         let mut r = result(n, "m0", 900, pass);
         r.base_tree = Some(base_tree.into());
-        r.merged_tree = Some(format!("tree:merge{n}"));
+        r.merged_tree = Some(after(n));
         r.stack = stack.iter().map(|s| s.to_string()).collect();
         r
     }
@@ -2885,7 +3208,7 @@ mod tests {
 
         // Both verifications finish: #1 on main, #2 on main plus #1.
         m.extra_results.push(on_tree(1, "tree:m0", &[], true));
-        m.extra_results.push(on_tree(2, "tree:merge1", &["1@head1abcdef"], true));
+        m.extra_results.push(on_tree(2, &after(1), &["1@head1abcdef"], true));
         let out = run(&mut m, &mut ledger, &[]);
         assert_eq!(m.merged, [1, 2], "both merge in one pass, with no rebuild in between");
         assert_eq!(m.dispatched.len(), 2);
@@ -2896,7 +3219,7 @@ mod tests {
     fn a_failure_seen_only_in_a_stack_decides_nothing_until_the_stack_has_merged() {
         let mut m = two_stale();
         m.results.remove(&key(2, &head(2)));
-        m.extra_results.push(failing(on_tree(2, "tree:merge1", &["1@head1abcdef"], true), "compiles"));
+        m.extra_results.push(failing(on_tree(2, &after(1), &["1@head1abcdef"], true), "compiles"));
         let out = run(&mut m, &mut Ledger::default(), &[]);
         assert!(out.decided.is_empty());
         assert_eq!(out.open.iter().find(|a| a.pr == 2).unwrap().status, AttemptStatus::Stale);
@@ -2928,7 +3251,7 @@ mod tests {
         let mut r1 = on_tree(1, "tree:m0", &[], true);
         r1.merged_tree = Some("tree:unexpected".into());
         m.extra_results.push(r1);
-        m.extra_results.push(on_tree(2, "tree:merge1", &["1@head1abcdef"], true));
+        m.extra_results.push(on_tree(2, &after(1), &["1@head1abcdef"], true));
         let mut ledger = Ledger::default();
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.merged, [1], "the next change is held back");
@@ -3191,7 +3514,7 @@ mod tests {
         let out = run(&mut m, &mut Ledger::default(), &[]);
         let body = render_comment(&cfg(), &out.open[0]);
         assert!(body.starts_with(COMMENT_MARKER));
-        assert!(body.contains("/approve head1abcde"));
+        assert!(body.contains("`/approve head1abcdef`"));
         for g in GATES.iter().filter(|g| g.0 != "quota") {
             assert!(body.contains(g.1), "missing {}", g.1);
         }
@@ -3225,7 +3548,7 @@ mod tests {
         m.prs.push(pr(1, "alice"));
         m.prs.push(built_on(2, "dave", 1));
         m.extra_results.push(stacked(1, "m0", "tree:m0", &[], 900));
-        let mut second = stacked(2, "m0", "tree:merge1", &["1@head1abcdef"], 800);
+        let mut second = stacked(2, "m0", &after(1), &["1@head1abcdef"], 800);
         second.base_metrics.tokens = 900;
         m.extra_results.push(second);
         m
@@ -3249,6 +3572,103 @@ mod tests {
         assert!(depends_ref("Depends: the other one").is_err());
         assert!(depends_ref("Depends: #1 and #2").is_err());
         assert!(depends_ref("Depends: #1\nDepends: #2").is_err());
+        // A line inside an HTML comment is not shown on the pull request and says nothing.
+        assert_eq!(depends_ref("Idea: none\n<!-- to build on another change, add:\nDepends: #5\n-->\n"), Ok(None));
+        assert_eq!(depends_ref("<!--\nDepends: #5\n-->\nDepends: #6"), Ok(Some(6)));
+        assert_eq!(depends_ref("<!-- a --> text\nDepends: #5\n<!-- b -->"), Ok(Some(5)));
+        assert_eq!(depends_ref("Idea: none\n<!-- never closed\nDepends: #5\n"), Ok(None));
+    }
+
+    #[test]
+    fn a_depends_line_hidden_in_a_comment_does_not_hold_the_change() {
+        let mut m = pair();
+        m.prs[1].body = "Shorter.\n\nIdea: none\n<!--\nDepends: #1\n-->".into();
+        m.extra_results.push(stacked(2, "m0", "tree:m0", &[], 800));
+        m.reviews.insert(2, vec![approve("bob", &head(2))]);
+        let mut ledger = Ledger::default();
+        let out = run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [2], "a change on main like any other, judged as a whole");
+        assert!(out.decided[0].depends.is_empty());
+    }
+
+    #[test]
+    fn a_forge_call_that_fails_changes_no_verdict() {
+        // The waived verification cannot be started (an arena whose workflow
+        // does not take the input yet): nothing is recorded as started, the
+        // pass goes on to the other pull requests, and it is tried again.
+        let mut m = small();
+        m.pr_comments.insert(1, vec![says(1, "lead", "/waive-min head1abcdef small but right", 0)]);
+        m.prs.push(pr(2, "dave"));
+        m.extra_results.push(stacked(2, "m0", "tree:m0", &[], 900));
+        m.reviews.insert(2, vec![approve("bob", &head(2))]);
+        m.failing.insert("dispatch_verify_min");
+        let mut ledger = Ledger::default();
+        let out = run(&mut m, &mut ledger, &[]);
+        assert!(m.waived.is_empty() && m.dispatched.is_empty());
+        assert!(!ledger.dispatched.keys().any(|k| k.starts_with("1@")), "no record of a run that did not start");
+        assert!(out.log.iter().any(|l| l.contains("#1: could not start a verification with the waived minimum")));
+        assert_eq!(m.merged, [2], "the pass continued");
+        m.failing.clear();
+        m.prs.pop();
+        run(&mut m, &mut ledger, &out.decided);
+        assert_eq!(m.waived, [(1, WAIVED_MIN)]);
+
+        // The files of a pull request cannot be read while a reservation is
+        // in force: the comment says the check could not be made, no gate
+        // and no status changes, and the change merges as it would have.
+        let reserved = |failing: &[&'static str], first_approved: bool| {
+            let mut m = pair();
+            m.issues.push(reserving(7, "`Paper/Tree`"));
+            m.files.insert(1, vec!["proj/Paper/Tree.lean".into()]);
+            m.files.insert(2, vec!["proj/Paper/Tree.lean".into()]);
+            m.failing.extend(failing.iter().copied());
+            if first_approved {
+                m.reviews.insert(1, vec![approve("bob", &head(1))]);
+            }
+            let mut ledger = Ledger::default();
+            ledger.claims.insert(7, Claim { login: "alice".into(), at: t(-1) });
+            m.prs[0].author = "erin".into();
+            let out = run(&mut m, &mut ledger, &[]);
+            (m, out)
+        };
+        let (works, fine) = reserved(&[], true);
+        let (m, out) = reserved(&["changed_files", "changed_between"], true);
+        assert_eq!(m.merged, [1]);
+        assert_eq!(m.merged, works.merged);
+        assert_eq!(m.statuses, works.statuses);
+        assert_eq!(out.decided[0].gates, fine.decided[0].gates);
+        assert_eq!(open(&out, 2).gates, open(&fine, 2).gates);
+        for a in [&out.decided[0], open(&out, 2)] {
+            assert_eq!(a.warnings.len(), 1);
+            assert!(a.warnings[0].starts_with("the check for files reserved by claimed ideas (#7) could not be made"), "{}", a.warnings[0]);
+            assert!(render_comment(&cfg(), a).contains("Warning (does not block): the check for files reserved"));
+        }
+        // Only the comparison of the two heads fails: the full list is used.
+        let (_, out) = reserved(&["changed_between"], false);
+        assert!(open(&out, 2).warnings[0].contains("may include files changed only by #1"));
+
+        // Whether the branch contains what it was built on cannot be asked:
+        // nothing merges from that commit until it can, and nothing is rejected.
+        let mut m = pair();
+        m.failing.insert("contains");
+        let mut ledger = Ledger::default();
+        let out = run(&mut m, &mut ledger, &[]);
+        assert_eq!(ledger.judged[&key(2, &head(2))].contains, None);
+        assert_eq!(open(&out, 2).status, AttemptStatus::Stale);
+        for n in [1, 2] {
+            m.reviews.insert(n, vec![approve("bob", &head(n))]);
+        }
+        let out = run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [1]);
+        assert_eq!(out.decided.len(), 1);
+        let second = open(&out, 2);
+        assert_eq!(second.status, AttemptStatus::Stale);
+        assert!(gate_of(second, "fresh").detail.as_deref().unwrap().contains("Could not check that this branch contains"));
+        assert!(m.dispatched.is_empty());
+        m.failing.clear();
+        m.prs.remove(0);
+        run(&mut m, &mut ledger, &out.decided);
+        assert_eq!(m.merged, [1, 2]);
     }
 
     #[test]
@@ -3329,49 +3749,276 @@ mod tests {
     #[test]
     fn a_dependency_revised_after_the_dependent_was_verified_makes_it_stale() {
         let mut m = pair();
-        // The tree #2 was verified on had #1 as it was then.
-        m.extra_results.iter_mut().find(|r| r.pr == 2).unwrap().base_tree = Some("tree:m0+old1".into());
         let mut ledger = Ledger::default();
         run(&mut m, &mut ledger, &[]);
 
-        // #1 is pushed to again. #2 is not approved: it is told, and waits.
+        // #2 is approved as the difference from #1 as it is.
+        m.reviews.insert(2, vec![approve("bob", &head(2))]);
+        run(&mut m, &mut ledger, &[]);
+
+        // #1 is pushed to again, and #2's branch already contains the new
+        // commit (its author made it). #2 is out of date: the approval was
+        // given under another statement of what it is built on, and has to
+        // be given again; the reviewer is told.
         m.prs[0].head_sha = "head1revised".into();
         m.active.insert(1);
-        let out = run(&mut m, &mut ledger, &[]);
+        let out = run_at(&mut m, &mut ledger, &[], t(1));
         let second = open(&out, 2);
         assert_eq!(second.status, AttemptStatus::Stale);
+        assert_eq!(second.judged_on, ["1@head1revised"]);
         let detail = gate_of(second, "fresh").detail.clone().unwrap();
-        assert!(detail.contains("#1 was revised after this was verified"), "{detail}");
-        assert!(detail.contains("merge #1's branch into yours and push"), "{detail}");
+        assert!(detail.contains("#1 was pushed to after this was verified"), "{detail}");
+        assert!(detail.contains("Approvals given before that push do not count"), "{detail}");
         assert!(detail.contains("once it is approved"), "{detail}");
+        assert_eq!(gate_of(second, "review").status, GateStatus::Pending);
+        assert!(m.posted.iter().any(|(n, b)| *n == 2 && b.contains("@bob your approval") && b.contains("`/approve head2abcdef`")));
         assert!(m.dispatched.is_empty());
+        run_at(&mut m, &mut ledger, &[], t(1));
+        assert_eq!(m.posted.len(), 1, "told once");
 
-        // Approved: it is verified again on #1's new commit, once.
-        m.reviews.insert(2, vec![approve("bob", &head(2))]);
-        let out = run(&mut m, &mut ledger, &[]);
+        // Approved again: it is verified again on #1's new commit, once.
+        m.reviews.insert(2, vec![approve_at("bob", &head(2), t(2))]);
+        let out = run_at(&mut m, &mut ledger, &[], t(1));
         assert_eq!(m.stacks, [vec![1]]);
         assert!(gate_of(open(&out, 2), "fresh").detail.as_deref().unwrap().contains("being verified again"));
-        run(&mut m, &mut ledger, &[]);
+        run_at(&mut m, &mut ledger, &[], t(1));
         assert_eq!(m.dispatched, [2]);
 
         // The revised #1 is approved and passes, and merges. #2's old result
         // was for another tree and is not merged from.
-        let mut first = stacked(1, "m0", "tree:m0", &[], 900);
-        first.head_sha = "head1revised".into();
-        m.extra_results.push(first);
-        m.reviews.insert(1, vec![approve("bob", "head1revised")]);
+        m.extra_results.push(at_head(stacked(1, "m0", "tree:m0", &[], 900), "head1revised"));
+        m.reviews.insert(1, vec![approve_at("bob", "head1revised", t(2))]);
         m.active.clear();
-        let out = run(&mut m, &mut ledger, &[]);
+        let out = run_at(&mut m, &mut ledger, &[], t(1));
         assert_eq!(m.merged, [1]);
         assert_eq!(open(&out, 2).status, AttemptStatus::Stale);
 
         // Its result on the new #1 is for the tree main now has: it merges.
-        let mut second = stacked(2, "m0", "tree:merge1", &["1@head1revised"], 800);
+        let tree = format!("tree:{}", landed_at(1, "head1revised"));
+        let mut second = stacked(2, "m0", &tree, &["1@head1revised"], 800);
         second.base_metrics.tokens = 900;
         m.extra_results.push(second);
         m.prs.remove(0);
-        run(&mut m, &mut ledger, &out.decided);
+        run_at(&mut m, &mut ledger, &out.decided, t(1));
         assert_eq!(m.merged, [1, 2]);
+    }
+
+    #[test]
+    fn an_approval_of_a_dependent_does_not_carry_it_past_a_revision_of_its_dependency() {
+        // #1 changes X and Y. #2 is built on it and approved as the
+        // difference from it. Y is objected to; #1 is revised to drop Y, and
+        // #2's branch still has the old commit, with Y.
+        let revised = "head1revised";
+        let scene = || {
+            let mut m = pair();
+            let mut ledger = Ledger::default();
+            run(&mut m, &mut ledger, &[]);
+            m.reviews.insert(2, vec![approve("bob", &head(2))]);
+            run(&mut m, &mut ledger, &[]);
+            m.prs[0].head_sha = revised.into();
+            m.lacks.insert((head(2), revised.into()));
+            m.extra_results.push(at_head(stacked(1, "m0", "tree:m0", &[], 950), revised));
+            m.reviews.insert(1, vec![approve("bob", revised)]);
+            // #2 would pass on main alone once #1 is in: the build is fine,
+            // and it brings Y back.
+            let tree = format!("tree:{}", landed_at(1, revised));
+            m.extra_results.push(stacked(2, &landed_at(1, revised), &tree, &[], 800));
+            (m, ledger)
+        };
+
+        // While #1 is open at its new commit: #2 needs a fix, and says what.
+        let (mut m, mut ledger) = scene();
+        m.reviews.remove(&1);
+        let out = run(&mut m, &mut ledger, &[]);
+        assert!(m.merged.is_empty());
+        let second = open(&out, 2);
+        assert_eq!(second.status, AttemptStatus::NeedsFix);
+        let detail = gate_of(second, "format").detail.clone().unwrap();
+        assert!(detail.contains("#1, which this is built on, is at `head1revis`, and this branch does not contain that commit"), "{detail}");
+        assert!(detail.contains("Merge #1's branch into yours and push; the new commit needs a new approval"), "{detail}");
+
+        // #1 merges as revised, in the pass that first sees the revision or
+        // in a later one: #2, the same commit with the same approval, does
+        // not merge, whatever passes on main.
+        for passes_between in [0, 1] {
+            let (mut m, mut ledger) = scene();
+            let mut log = Vec::new();
+            if passes_between == 1 {
+                m.reviews.remove(&1);
+                run(&mut m, &mut ledger, &log);
+                m.reviews.insert(1, vec![approve("bob", revised)]);
+            }
+            let out = run(&mut m, &mut ledger, &log);
+            log.extend(out.decided.iter().cloned());
+            assert_eq!(m.merged, [1]);
+            m.prs.remove(0);
+            for _ in 0..2 {
+                let out = run(&mut m, &mut ledger, &log);
+                assert_eq!(m.merged, [1], "Y would land with #2, approved by nobody");
+                let second = open(&out, 2);
+                assert_eq!(second.status, AttemptStatus::NeedsFix);
+                let detail = gate_of(second, "format").detail.clone().unwrap();
+                assert!(
+                    detail.contains("was revised before it merged") || detail.contains("merged as `head1revis`, and this branch does not contain that commit"),
+                    "{detail}"
+                );
+                assert!(detail.contains("Merge `main` into your branch and push"), "{detail}");
+                assert!(detail.contains("needs a new approval"), "{detail}");
+            }
+
+            // The author merges main and pushes: a new commit, judged against
+            // main as a whole, which needs its own approval.
+            m.prs[0].head_sha = "head2merged".into();
+            let tree = format!("tree:{}", landed_at(1, revised));
+            m.extra_results.push(at_head(stacked(2, &landed_at(1, revised), &tree, &[], 800), "head2merged"));
+            let out = run(&mut m, &mut ledger, &log);
+            assert_eq!(m.merged, [1]);
+            assert_eq!(open(&out, 2).status, AttemptStatus::AwaitingReview);
+            m.reviews.insert(2, vec![approve("bob", "head2merged")]);
+            run(&mut m, &mut ledger, &log);
+            assert_eq!(m.merged, [1, 2]);
+        }
+    }
+
+    #[test]
+    fn the_record_of_what_a_commit_was_judged_on_survives_its_absence_from_a_pass() {
+        // #2 is approved as the difference from #1.
+        let mut m = pair();
+        let mut ledger = Ledger::default();
+        let out = run(&mut m, &mut ledger, &[]);
+        assert!(render_comment(&cfg(), open(&out, 2)).contains("Depends on #1"));
+        assert!(render_comment(&cfg(), open(&out, 2)).contains("judged on top of #1 at `head1abcdef`"));
+        assert_eq!(ledger.judged[&key(2, &head(2))].on, ["1@head1abcdef"]);
+        m.reviews.insert(2, vec![approve("bob", &head(2))]);
+        run(&mut m, &mut ledger, &[]);
+        assert!(m.merged.is_empty());
+
+        // Its author makes it a draft (or closes it, or retargets it) for a
+        // pass, then removes the line and brings it back: the same commit.
+        for absent in ["draft", "closed", "retargeted"] {
+            let mut m = Mock { main: "m0".into(), prs: m.prs.clone(), reviews: m.reviews.clone(), ..Default::default() };
+            m.extra_results.push(stacked(1, "m0", "tree:m0", &[], 900));
+            let mut ledger = ledger.clone();
+            let second = m.prs[1].clone();
+            match absent {
+                "draft" => m.prs[1].draft = true,
+                "closed" => drop(m.prs.remove(1)),
+                _ => m.prs[1].base_ref = "other".into(),
+            }
+            run(&mut m, &mut ledger, &[]);
+            assert_eq!(ledger.judged[&key(2, &head(2))].on, ["1@head1abcdef"], "{absent}: the record is kept");
+            m.prs.retain(|p| p.number != 2);
+            m.prs.push(PullRequest { body: "Shorter.\n\nIdea: none".into(), ..second });
+            m.extra_results.push(stacked(2, "m0", "tree:m0", &[], 800));
+            let out = run(&mut m, &mut ledger, &[]);
+            assert!(m.merged.is_empty(), "{absent}: #2 would merge with #1's commits; #1 is open and unapproved");
+            let second = open(&out, 2);
+            assert_eq!(second.status, AttemptStatus::NeedsFix, "{absent}");
+            assert!(gate_of(second, "format").detail.as_deref().unwrap().contains("judged as a change on top of #1"));
+        }
+
+        // The record goes when the pull request has merged.
+        let mut m = green();
+        m.reviews.insert(1, vec![approve("bob", &head(1))]);
+        let mut ledger = Ledger::default();
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [1]);
+        assert!(ledger.judged.is_empty());
+
+        // Beyond the bound the oldest records of pull requests that are not
+        // open go; those of open ones stay.
+        let mut m = green();
+        let mut ledger = Ledger::default();
+        for n in 0..(JUDGED_KEPT as u64 + 5) {
+            ledger.judged.insert(key(100 + n, "gone"), Judged { at: t(-10) + Duration::seconds(n as i64), on: vec![], contains: Some(true) });
+        }
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(ledger.judged.len(), JUDGED_KEPT);
+        assert!(ledger.judged.contains_key(&key(1, &head(1))));
+        assert!(!ledger.judged.contains_key(&key(100, "gone")));
+        assert!(ledger.judged.contains_key(&key(106, "gone")));
+    }
+
+    #[test]
+    fn an_approval_given_before_the_commit_was_first_judged_does_not_count() {
+        // Approved before the gatekeeper has seen the commit: while it was a
+        // draft with a `Depends` line, say, which the author then removed.
+        let mut m = green();
+        m.reviews.insert(1, vec![approve_at("bob", &head(1), t(-1))]);
+        let mut ledger = Ledger::default();
+        let out = run(&mut m, &mut ledger, &[]);
+        assert!(m.merged.is_empty());
+        assert_eq!(ledger.judged[&key(1, &head(1))].at, t(0));
+        let review = gate_of(&out.open[0], "review");
+        assert_eq!(review.status, GateStatus::Pending);
+        assert!(review.detail.as_deref().unwrap().contains("bob were given before the gatekeeper had judged this commit"));
+        assert!(review.detail.as_deref().unwrap().contains("`/approve head1abcdef`"));
+        assert!(render_comment(&cfg(), &out.open[0]).contains("An approval counts only if it is given after this comment first appeared"));
+        // The reviewer is told on the pull request, once.
+        assert_eq!(m.posted.len(), 1);
+        assert!(m.posted[0].1.starts_with("@bob your approval of `head1abcde` does not count"));
+        assert!(m.posted[0].1.ends_with("`/approve head1abcdef`."));
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.posted.len(), 1);
+        assert!(m.merged.is_empty());
+
+        // An approval at the very moment of the first judgement is not after it.
+        m.reviews.insert(1, vec![approve_at("bob", &head(1), t(0))]);
+        run(&mut m, &mut ledger, &[]);
+        assert!(m.merged.is_empty());
+
+        // Given again, by comment or by review, it counts.
+        m.pr_comments.insert(1, vec![says(1, "bob", "/approve head1abcdef", 0)]);
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [1]);
+
+        // A request for changes made early still blocks: only approvals are held to the moment.
+        let mut m = green();
+        m.reviews.insert(1, vec![approve("bob", &head(1))]);
+        m.pr_comments.insert(1, vec![CommentInfo { created_at: t(-1), ..says(1, "lead", "/request-changes", 0) }]);
+        run(&mut m, &mut Ledger::default(), &[]);
+        assert!(m.merged.is_empty());
+
+        // A commit whose record was lost is judged for the first time again.
+        let mut m = green();
+        m.reviews.insert(1, vec![approve("bob", &head(1))]);
+        let later = Gatekeeper { cfg: &cfg(), forge: &mut m, now: t(2) }
+            .run(&mut Ledger::default(), &mut roles(), &[])
+            .unwrap();
+        assert!(m.merged.is_empty());
+        assert_eq!(later.open[0].status, AttemptStatus::AwaitingReview);
+    }
+
+    #[test]
+    fn a_dependent_is_not_rejected_for_a_failed_stacked_build_before_its_dependency_has_passed() {
+        // #2's run, with #1 applied first, fails to build. #1 has no result
+        // of its own yet: the failure may be #1's.
+        let mut m = pair();
+        m.extra_results.clear();
+        m.extra_results.push(failing(stacked(2, "m0", &after(1), &["1@head1abcdef"], 800), "compiles"));
+        m.active.insert(1);
+        let mut ledger = Ledger::default();
+        let out = run(&mut m, &mut ledger, &[]);
+        assert!(out.decided.is_empty(), "a failure seen only in a stack decides nothing");
+        let second = open(&out, 2);
+        assert_eq!(second.status, AttemptStatus::Stale);
+        assert!(gate_of(second, "compiles").detail.as_deref().unwrap().contains("the failure may not be this change's"));
+        assert!(gate_of(second, "fresh").detail.as_deref().unwrap().contains("judged when it has"));
+        assert!(!m.labels.contains(&(2, LABEL_REJECTED.into(), true)));
+        assert!(m.dispatched.is_empty(), "nothing is gained by building it again now");
+
+        // #1 passes on its own at that commit: now the failure is #2's.
+        m.extra_results.push(stacked(1, "m0", "tree:m0", &[], 900));
+        let out = run(&mut m, &mut ledger, &[]);
+        assert_eq!(out.decided.len(), 1);
+        assert_eq!((out.decided[0].pr, out.decided[0].status), (2, AttemptStatus::Rejected));
+
+        // #1 passed, but at another commit than the one that was applied: undecided.
+        let mut m = pair();
+        m.extra_results.retain(|r| r.pr == 1);
+        m.extra_results.push(failing(stacked(2, "m0", &after(1), &["1@head1older"], 800), "compiles"));
+        let out = run(&mut m, &mut Ledger::default(), &[]);
+        assert!(out.decided.is_empty());
     }
 
     #[test]
@@ -3430,7 +4077,7 @@ mod tests {
         m.extra_results.clear();
         m.extra_results.push(failing(stacked(1, "m0", "tree:m0", &[], 900), "compiles"));
         // Built with #1 applied first, so its build failed as well.
-        m.extra_results.push(failing(stacked(2, "m0", "tree:merge1", &["1@head1abcdef"], 800), "compiles"));
+        m.extra_results.push(failing(stacked(2, "m0", &after(1), &["1@head1abcdef"], 800), "compiles"));
         m.reviews.insert(2, vec![approve("bob", &head(2))]);
         let mut ledger = Ledger::default();
         let out = run(&mut m, &mut ledger, &[]);
@@ -3460,7 +4107,7 @@ mod tests {
     fn a_chain_of_changes_merges_in_order_as_one_train() {
         let mut m = pair();
         m.prs.push(built_on(3, "erin", 2));
-        let mut third = stacked(3, "m0", "tree:merge2", &["1@head1abcdef", "2@head2abcdef"], 700);
+        let mut third = stacked(3, "m0", &after(2), &["1@head1abcdef", "2@head2abcdef"], 700);
         third.base_metrics.tokens = 800;
         m.extra_results.push(third);
         let mut ledger = Ledger::default();
@@ -3489,7 +4136,7 @@ mod tests {
         m.prs.push(built_on(1, "alice", 2));
         m.prs.push(pr(2, "dave"));
         m.extra_results.push(stacked(2, "m0", "tree:m0", &[], 900));
-        m.extra_results.push(stacked(1, "m0", "tree:merge2", &["2@head2abcdef"], 800));
+        m.extra_results.push(stacked(1, "m0", &after(2), &["2@head2abcdef"], 800));
         for n in [1, 2] {
             m.reviews.insert(n, vec![approve("bob", &head(n))]);
         }
@@ -3530,7 +4177,7 @@ mod tests {
 
         // The run on main alone is the merge that lands: its result merges.
         m.prs.remove(0);
-        let mut alone = stacked(2, "merge1", "tree:merge1", &[], 800);
+        let mut alone = stacked(2, &landed(1), &after(1), &[], 800);
         alone.base_metrics.tokens = 900;
         m.extra_results.push(alone);
         run(&mut m, &mut ledger, &out.decided);
@@ -3541,7 +4188,7 @@ mod tests {
         // that was judged on top of another.
         let mut m = pair();
         m.extra_results.retain(|r| r.pr != 2);
-        m.extra_results.push(on_tree(2, "tree:merge1", &["1@head1abcdef"], true));
+        m.extra_results.push(on_tree(2, &after(1), &["1@head1abcdef"], true));
         let mut ledger = Ledger::default();
         run(&mut m, &mut ledger, &[]);
         for n in [1, 2] {
@@ -3553,7 +4200,7 @@ mod tests {
         // The same holds for any stacked result, with or without a `Depends` line.
         let mut m = two_stale();
         m.extra_results.push(stacked(1, "m0", "tree:m0", &[], 900));
-        let mut second = stacked(2, "m0", "tree:merge1", &["1@head1abcdef"], 900);
+        let mut second = stacked(2, "m0", &after(1), &["1@head1abcdef"], 900);
         second.landing_tree = Some("tree:something-else".into());
         m.extra_results.push(second);
         run(&mut m, &mut Ledger::default(), &[]);
@@ -3810,9 +4457,9 @@ mod tests {
         let mut ledger = Ledger::default();
         let out = run(&mut m, &mut ledger, &[]);
         assert_eq!(out.open[0].status, AttemptStatus::NeedsFix);
-        assert!(render_comment(&cfg(), &out.open[0]).contains("`/waive-min head1abcde <reason>`"));
+        assert!(render_comment(&cfg(), &out.open[0]).contains("`/waive-min head1abcdef <reason>`"));
 
-        let waive = says(1, "lead", "Worth it.\n/waive-min head1ab removes a statement that was wrong", 0);
+        let waive = says(1, "lead", "Worth it.\n/waive-min head1abcdef removes a statement that was wrong", 0);
         m.pr_comments.insert(1, vec![waive.clone()]);
         m.comments = vec![waive];
         let out = run(&mut m, &mut ledger, &[]);
@@ -3820,7 +4467,7 @@ mod tests {
         assert_eq!(out.open[0].status, AttemptStatus::Verifying);
         let waiver = out.open[0].waiver.clone().unwrap();
         assert_eq!((waiver.by.as_str(), waiver.reason.as_str()), ("lead", "removes a statement that was wrong"));
-        assert!(m.posted.iter().any(|(n, b)| *n == 1 && b.contains("is waived for commit head1abcde by lead")));
+        assert!(m.posted.iter().any(|(n, b)| *n == 1 && b.contains("is waived for commit head1abcdef by lead")));
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.waived.len(), 1, "once per commit");
 
@@ -3892,7 +4539,7 @@ mod tests {
             assert!(m.waived.is_empty(), "{who}: {text}");
             assert_eq!(out.open[0].status, AttemptStatus::NeedsFix, "{who}: {text}");
             // A leader who got the form wrong is told the exact line; others get no answer.
-            assert_eq!(m.posted.iter().any(|(_, b)| b.contains("Usage: `/waive-min head1abcde <reason>`")), who == "lead");
+            assert_eq!(m.posted.iter().any(|(_, b)| b.contains("Usage: `/waive-min head1abcdef <reason>`")), who == "lead");
         }
 
         // A leader cannot waive for a change from the leader's own account,
@@ -3917,6 +4564,8 @@ mod tests {
         assert_eq!(largest_number("~1.5k (see #4000)"), 1500);
         assert_eq!(largest_number("2k to 3K"), 3000);
         assert_eq!(largest_number("unknown"), 0);
+        // Digits of other scripts are not read as a number (they would not parse).
+        assert_eq!(largest_number("about 300, or ٣٠٠٠٠ by another count; ９９９９９"), 300);
         assert_eq!(section("**Targets** a\n**Estimated saving:** 120\nmaybe 300\n**Trial** none yet", "estimat").as_deref(), Some("120\nmaybe 300"));
         assert_eq!(section("## Estimated saving\n\n900\n\n## Trial\nported `A.lean`: 410", "trial").as_deref(), Some("\nported `A.lean`: 410"));
         assert_eq!(section("no headings here", "trial"), None);
