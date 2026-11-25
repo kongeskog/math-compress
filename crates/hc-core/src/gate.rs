@@ -2612,7 +2612,7 @@ mod tests {
             title: format!("shorten(Paper/Tree): a shorter proof number {n}"),
             author: author.into(),
             body: "Shorter.\n\nIdea: none".into(),
-            head_sha: format!("head{n}abcdef"),
+            head_sha: head(n),
             base_ref: "main".into(),
             created_at: t(-1),
             url: format!("https://x/pull/{n}"),
@@ -2622,8 +2622,13 @@ mod tests {
         }
     }
 
+    /// The head commit of pull request `n` in these tests: a full hash, 40
+    /// hexadecimal characters, that starts `<n>abcdef` (for #1:
+    /// `1abcdef111…`). Other commits in the tests are written out in the
+    /// same form, with another start.
     fn head(n: u64) -> String {
-        format!("head{n}abcdef")
+        let d = (n % 10).to_string();
+        format!("{d}abcdef{}", d.repeat(33))
     }
 
     /// Main's commit after pull request `n` merged with head `sha`.
@@ -2780,7 +2785,7 @@ mod tests {
         let mut m = green();
         m.prs[0].author = "bob".into();
         m.reviews.insert(1, vec![approve("bob", &head(1))]);
-        m.pr_comments.insert(1, vec![says(1, "bob", "/approve head1abcdef", 0)]);
+        m.pr_comments.insert(1, vec![says(1, "bob", "/approve 1abcdef111111111111111111111111111111111", 0)]);
         run(&mut m, &mut Ledger::default(), &[]);
         assert!(m.merged.is_empty());
     }
@@ -2795,22 +2800,22 @@ mod tests {
         // A prefix of the head commit is not the commit: the author could
         // push another commit with the same prefix and inherit the approval.
         // The reviewer is told the line to use.
-        for short in ["head1ab", "head1abcde"] {
+        for short in ["1abcdef", "1abcdef111"] {
             let approval = says(1, "bob", &format!("Looks right.\n/approve {short}"), 0);
             m.pr_comments.insert(1, vec![approval.clone()]);
             m.comments = vec![approval];
             m.posted.clear();
             run(&mut m, &mut Ledger::default(), &[]);
             assert!(m.merged.is_empty(), "{short}");
-            assert!(m.posted.iter().any(|(n, b)| *n == 1 && b.contains("Name it in full: `/approve head1abcdef`")), "{short}");
+            assert!(m.posted.iter().any(|(n, b)| *n == 1 && b.contains("Name it in full: `/approve 1abcdef111111111111111111111111111111111`")), "{short}");
         }
         // Someone whose approval would not count anyway gets no answer.
-        m.comments = vec![says(1, "mallory", "/approve head1ab", 0)];
+        m.comments = vec![says(1, "mallory", "/approve 1abcdef", 0)];
         m.posted.clear();
         run(&mut m, &mut Ledger::default(), &[]);
         assert!(m.posted.is_empty());
 
-        m.pr_comments.insert(1, vec![says(1, "bob", "Looks right.\n/approve head1abcdef", 0)]);
+        m.pr_comments.insert(1, vec![says(1, "bob", "Looks right.\n/approve 1abcdef111111111111111111111111111111111", 0)]);
         m.comments.clear();
         run(&mut m, &mut Ledger::default(), &[]);
         assert_eq!(m.merged, [1]);
@@ -2822,11 +2827,11 @@ mod tests {
         // Approved and waived by prefix for one commit; the author pushes
         // another commit whose hash starts the same way.
         let mut m = small();
-        m.prs[0].head_sha = "head1abzzzz".into();
-        m.extra_results.push(at_head(waived_result(&head(1)), "head1abzzzz"));
+        m.prs[0].head_sha = "1abcdef999999999999999999999999999999999".into();
+        m.extra_results.push(at_head(waived_result(&head(1)), "1abcdef999999999999999999999999999999999"));
         m.pr_comments.insert(
             1,
-            vec![says(1, "bob", "/approve head1ab", 0), says(1, "lead", "/waive-min head1ab small but right", 0)],
+            vec![says(1, "bob", "/approve 1abcdef", 0), says(1, "lead", "/waive-min 1abcdef small but right", 0)],
         );
         let out = run(&mut m, &mut Ledger::default(), &[]);
         assert!(m.merged.is_empty());
@@ -2838,7 +2843,7 @@ mod tests {
     fn bootstrap_lets_a_leader_review_changes_from_the_leaders_account() {
         let mut m = green();
         m.prs[0].author = "lead".into();
-        m.pr_comments.insert(1, vec![says(1, "lead", "/approve head1abcdef", 0)]);
+        m.pr_comments.insert(1, vec![says(1, "lead", "/approve 1abcdef111111111111111111111111111111111", 0)]);
         run(&mut m, &mut Ledger::default(), &[]);
         assert!(m.merged.is_empty(), "not allowed outside bootstrap");
 
@@ -2857,7 +2862,7 @@ mod tests {
         let mut m = green();
         m.prs[0].author = "lead".into();
         m.results.get_mut(&key(1, &head(1))).unwrap().changed_files = 30;
-        m.pr_comments.insert(1, vec![says(1, "lead", "/approve head1abcdef", 0)]);
+        m.pr_comments.insert(1, vec![says(1, "lead", "/approve 1abcdef111111111111111111111111111111111", 0)]);
         run_with(&mut m, &c, &mut Ledger::default(), &mut roles(), &[]);
         assert!(m.merged.is_empty(), "one review is not enough for a large change");
 
@@ -2865,14 +2870,14 @@ mod tests {
         m.pr_comments.insert(
             1,
             vec![
-                says(1, "lead", "/approve head1abcdef", 0),
+                says(1, "lead", "/approve 1abcdef111111111111111111111111111111111", 0),
                 says(1, "lead", "/request-changes", 1),
-                says(1, "lead", "/approve head1abcdef", 2),
+                says(1, "lead", "/approve 1abcdef111111111111111111111111111111111", 2),
             ],
         );
         run_with(&mut m, &c, &mut Ledger::default(), &mut roles(), &[]);
         assert!(m.merged.is_empty());
-        m.pr_comments.get_mut(&1).unwrap().push(says(1, "lead", "/approve head1abcdef", 3));
+        m.pr_comments.get_mut(&1).unwrap().push(says(1, "lead", "/approve 1abcdef111111111111111111111111111111111", 3));
         run_with(&mut m, &c, &mut Ledger::default(), &mut roles(), &[]);
         assert_eq!(m.merged, [1]);
     }
@@ -3062,8 +3067,8 @@ mod tests {
 
         // The whole line was verified as a train and merges in one pass.
         m.extra_results.push(on_tree(1, "tree:m0", &[], true));
-        m.extra_results.push(on_tree(2, &after(1), &["1@head1abcdef"], true));
-        m.extra_results.push(on_tree(3, &after(2), &["1@head1abcdef", "2@head2abcdef"], true));
+        m.extra_results.push(on_tree(2, &after(1), &["1@1abcdef111111111111111111111111111111111"], true));
+        m.extra_results.push(on_tree(3, &after(2), &["1@1abcdef111111111111111111111111111111111", "2@2abcdef222222222222222222222222222222222"], true));
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.merged, [1, 2, 3]);
     }
@@ -3097,7 +3102,7 @@ mod tests {
 
         m.active.extend([1, 2]);
         m.extra_results.push(on_tree(1, "tree:m0", &[], true));
-        m.extra_results.push(on_tree(2, &after(1), &["1@head1abcdef"], true));
+        m.extra_results.push(on_tree(2, &after(1), &["1@1abcdef111111111111111111111111111111111"], true));
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.merged, [1, 2]);
     }
@@ -3150,7 +3155,7 @@ mod tests {
         let mut m = two_stale();
         let mut ledger = Ledger::default();
         run(&mut m, &mut ledger, &[]);
-        m.extra_results.push(on_tree(2, &after(1), &["1@head1abcdef"], true));
+        m.extra_results.push(on_tree(2, &after(1), &["1@1abcdef111111111111111111111111111111111"], true));
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.dispatched.len(), 2, "nothing to do until #1's result is in");
 
@@ -3160,7 +3165,7 @@ mod tests {
         m.reviews.insert(3, vec![approve("bob", &head(3))]);
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.stacks.last().unwrap(), &vec![1, 2]);
-        m.extra_results.push(on_tree(3, &after(2), &["1@head1abcdef", "2@head2abcdef"], true));
+        m.extra_results.push(on_tree(3, &after(2), &["1@1abcdef111111111111111111111111111111111", "2@2abcdef222222222222222222222222222222222"], true));
         m.extra_results.push(on_tree(1, "tree:m0", &[], true));
         m.extra_results.retain(|r| r.pr != 2);
         m.active.insert(2);
@@ -3208,7 +3213,7 @@ mod tests {
 
         // Both verifications finish: #1 on main, #2 on main plus #1.
         m.extra_results.push(on_tree(1, "tree:m0", &[], true));
-        m.extra_results.push(on_tree(2, &after(1), &["1@head1abcdef"], true));
+        m.extra_results.push(on_tree(2, &after(1), &["1@1abcdef111111111111111111111111111111111"], true));
         let out = run(&mut m, &mut ledger, &[]);
         assert_eq!(m.merged, [1, 2], "both merge in one pass, with no rebuild in between");
         assert_eq!(m.dispatched.len(), 2);
@@ -3219,7 +3224,7 @@ mod tests {
     fn a_failure_seen_only_in_a_stack_decides_nothing_until_the_stack_has_merged() {
         let mut m = two_stale();
         m.results.remove(&key(2, &head(2)));
-        m.extra_results.push(failing(on_tree(2, &after(1), &["1@head1abcdef"], true), "compiles"));
+        m.extra_results.push(failing(on_tree(2, &after(1), &["1@1abcdef111111111111111111111111111111111"], true), "compiles"));
         let out = run(&mut m, &mut Ledger::default(), &[]);
         assert!(out.decided.is_empty());
         assert_eq!(out.open.iter().find(|a| a.pr == 2).unwrap().status, AttemptStatus::Stale);
@@ -3251,7 +3256,7 @@ mod tests {
         let mut r1 = on_tree(1, "tree:m0", &[], true);
         r1.merged_tree = Some("tree:unexpected".into());
         m.extra_results.push(r1);
-        m.extra_results.push(on_tree(2, &after(1), &["1@head1abcdef"], true));
+        m.extra_results.push(on_tree(2, &after(1), &["1@1abcdef111111111111111111111111111111111"], true));
         let mut ledger = Ledger::default();
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.merged, [1], "the next change is held back");
@@ -3514,7 +3519,7 @@ mod tests {
         let out = run(&mut m, &mut Ledger::default(), &[]);
         let body = render_comment(&cfg(), &out.open[0]);
         assert!(body.starts_with(COMMENT_MARKER));
-        assert!(body.contains("`/approve head1abcdef`"));
+        assert!(body.contains("`/approve 1abcdef111111111111111111111111111111111`"));
         for g in GATES.iter().filter(|g| g.0 != "quota") {
             assert!(body.contains(g.1), "missing {}", g.1);
         }
@@ -3548,7 +3553,7 @@ mod tests {
         m.prs.push(pr(1, "alice"));
         m.prs.push(built_on(2, "dave", 1));
         m.extra_results.push(stacked(1, "m0", "tree:m0", &[], 900));
-        let mut second = stacked(2, "m0", &after(1), &["1@head1abcdef"], 800);
+        let mut second = stacked(2, "m0", &after(1), &["1@1abcdef111111111111111111111111111111111"], 800);
         second.base_metrics.tokens = 900;
         m.extra_results.push(second);
         m
@@ -3597,7 +3602,7 @@ mod tests {
         // does not take the input yet): nothing is recorded as started, the
         // pass goes on to the other pull requests, and it is tried again.
         let mut m = small();
-        m.pr_comments.insert(1, vec![says(1, "lead", "/waive-min head1abcdef small but right", 0)]);
+        m.pr_comments.insert(1, vec![says(1, "lead", "/waive-min 1abcdef111111111111111111111111111111111 small but right", 0)]);
         m.prs.push(pr(2, "dave"));
         m.extra_results.push(stacked(2, "m0", "tree:m0", &[], 900));
         m.reviews.insert(2, vec![approve("bob", &head(2))]);
@@ -3686,7 +3691,7 @@ mod tests {
         assert!(gate_of(second, "fresh").detail.as_deref().unwrap().contains("merges only after it has merged"));
         let body = render_comment(&cfg(), second);
         assert!(body.contains("Depends on #1"), "{body}");
-        assert!(body.contains("measured against main with #1 (`head1ab`) applied"), "{body}");
+        assert!(body.contains("measured against main with #1 (`1abcdef`) applied"), "{body}");
         assert!(body.contains("| Metric | Main + #1 |"), "{body}");
 
         // Approved before #1 is: it waits, and holds nobody up.
@@ -3703,7 +3708,7 @@ mod tests {
         assert_eq!(m.merged, [1, 2]);
         assert!(m.dispatched.is_empty(), "no rebuild in between");
         assert!(out.decided.iter().all(|a| a.status == AttemptStatus::Merged));
-        assert_eq!(out.decided[1].measured_on, ["1@head1abcdef"]);
+        assert_eq!(out.decided[1].measured_on, ["1@1abcdef111111111111111111111111111111111"]);
     }
 
     #[test]
@@ -3739,7 +3744,7 @@ mod tests {
 
         // A new push is a new commit: it may stand on its own, and needs its own review.
         m.prs.pop();
-        m.prs[1].head_sha = "head2pushed".into();
+        m.prs[1].head_sha = "2b05bed222222222222222222222222222222222".into();
         m.prs[1].body = "Shorter.\n\nIdea: none".into();
         let out = run(&mut m, &mut ledger, &[]);
         assert!(m.merged.is_empty(), "the approval was for the other commit");
@@ -3760,18 +3765,18 @@ mod tests {
         // commit (its author made it). #2 is out of date: the approval was
         // given under another statement of what it is built on, and has to
         // be given again; the reviewer is told.
-        m.prs[0].head_sha = "head1revised".into();
+        m.prs[0].head_sha = "1ee15ed111111111111111111111111111111111".into();
         m.active.insert(1);
         let out = run_at(&mut m, &mut ledger, &[], t(1));
         let second = open(&out, 2);
         assert_eq!(second.status, AttemptStatus::Stale);
-        assert_eq!(second.judged_on, ["1@head1revised"]);
+        assert_eq!(second.judged_on, ["1@1ee15ed111111111111111111111111111111111"]);
         let detail = gate_of(second, "fresh").detail.clone().unwrap();
         assert!(detail.contains("#1 was pushed to after this was verified"), "{detail}");
         assert!(detail.contains("Approvals given before that push do not count"), "{detail}");
         assert!(detail.contains("once it is approved"), "{detail}");
         assert_eq!(gate_of(second, "review").status, GateStatus::Pending);
-        assert!(m.posted.iter().any(|(n, b)| *n == 2 && b.contains("@bob your approval") && b.contains("`/approve head2abcdef`")));
+        assert!(m.posted.iter().any(|(n, b)| *n == 2 && b.contains("@bob your approval") && b.contains("`/approve 2abcdef222222222222222222222222222222222`")));
         assert!(m.dispatched.is_empty());
         run_at(&mut m, &mut ledger, &[], t(1));
         assert_eq!(m.posted.len(), 1, "told once");
@@ -3786,16 +3791,16 @@ mod tests {
 
         // The revised #1 is approved and passes, and merges. #2's old result
         // was for another tree and is not merged from.
-        m.extra_results.push(at_head(stacked(1, "m0", "tree:m0", &[], 900), "head1revised"));
-        m.reviews.insert(1, vec![approve_at("bob", "head1revised", t(2))]);
+        m.extra_results.push(at_head(stacked(1, "m0", "tree:m0", &[], 900), "1ee15ed111111111111111111111111111111111"));
+        m.reviews.insert(1, vec![approve_at("bob", "1ee15ed111111111111111111111111111111111", t(2))]);
         m.active.clear();
         let out = run_at(&mut m, &mut ledger, &[], t(1));
         assert_eq!(m.merged, [1]);
         assert_eq!(open(&out, 2).status, AttemptStatus::Stale);
 
         // Its result on the new #1 is for the tree main now has: it merges.
-        let tree = format!("tree:{}", landed_at(1, "head1revised"));
-        let mut second = stacked(2, "m0", &tree, &["1@head1revised"], 800);
+        let tree = format!("tree:{}", landed_at(1, "1ee15ed111111111111111111111111111111111"));
+        let mut second = stacked(2, "m0", &tree, &["1@1ee15ed111111111111111111111111111111111"], 800);
         second.base_metrics.tokens = 900;
         m.extra_results.push(second);
         m.prs.remove(0);
@@ -3808,7 +3813,7 @@ mod tests {
         // #1 changes X and Y. #2 is built on it and approved as the
         // difference from it. Y is objected to; #1 is revised to drop Y, and
         // #2's branch still has the old commit, with Y.
-        let revised = "head1revised";
+        let revised = "1ee15ed111111111111111111111111111111111";
         let scene = || {
             let mut m = pair();
             let mut ledger = Ledger::default();
@@ -3834,7 +3839,7 @@ mod tests {
         let second = open(&out, 2);
         assert_eq!(second.status, AttemptStatus::NeedsFix);
         let detail = gate_of(second, "format").detail.clone().unwrap();
-        assert!(detail.contains("#1, which this is built on, is at `head1revis`, and this branch does not contain that commit"), "{detail}");
+        assert!(detail.contains("#1, which this is built on, is at `1ee15ed111`, and this branch does not contain that commit"), "{detail}");
         assert!(detail.contains("Merge #1's branch into yours and push; the new commit needs a new approval"), "{detail}");
 
         // #1 merges as revised, in the pass that first sees the revision or
@@ -3859,7 +3864,7 @@ mod tests {
                 assert_eq!(second.status, AttemptStatus::NeedsFix);
                 let detail = gate_of(second, "format").detail.clone().unwrap();
                 assert!(
-                    detail.contains("was revised before it merged") || detail.contains("merged as `head1revis`, and this branch does not contain that commit"),
+                    detail.contains("was revised before it merged") || detail.contains("merged as `1ee15ed111`, and this branch does not contain that commit"),
                     "{detail}"
                 );
                 assert!(detail.contains("Merge `main` into your branch and push"), "{detail}");
@@ -3868,13 +3873,13 @@ mod tests {
 
             // The author merges main and pushes: a new commit, judged against
             // main as a whole, which needs its own approval.
-            m.prs[0].head_sha = "head2merged".into();
+            m.prs[0].head_sha = "2e59ed0222222222222222222222222222222222".into();
             let tree = format!("tree:{}", landed_at(1, revised));
-            m.extra_results.push(at_head(stacked(2, &landed_at(1, revised), &tree, &[], 800), "head2merged"));
+            m.extra_results.push(at_head(stacked(2, &landed_at(1, revised), &tree, &[], 800), "2e59ed0222222222222222222222222222222222"));
             let out = run(&mut m, &mut ledger, &log);
             assert_eq!(m.merged, [1]);
             assert_eq!(open(&out, 2).status, AttemptStatus::AwaitingReview);
-            m.reviews.insert(2, vec![approve("bob", "head2merged")]);
+            m.reviews.insert(2, vec![approve("bob", "2e59ed0222222222222222222222222222222222")]);
             run(&mut m, &mut ledger, &log);
             assert_eq!(m.merged, [1, 2]);
         }
@@ -3887,8 +3892,8 @@ mod tests {
         let mut ledger = Ledger::default();
         let out = run(&mut m, &mut ledger, &[]);
         assert!(render_comment(&cfg(), open(&out, 2)).contains("Depends on #1"));
-        assert!(render_comment(&cfg(), open(&out, 2)).contains("judged on top of #1 at `head1abcdef`"));
-        assert_eq!(ledger.judged[&key(2, &head(2))].on, ["1@head1abcdef"]);
+        assert!(render_comment(&cfg(), open(&out, 2)).contains("judged on top of #1 at `1abcdef111111111111111111111111111111111`"));
+        assert_eq!(ledger.judged[&key(2, &head(2))].on, ["1@1abcdef111111111111111111111111111111111"]);
         m.reviews.insert(2, vec![approve("bob", &head(2))]);
         run(&mut m, &mut ledger, &[]);
         assert!(m.merged.is_empty());
@@ -3906,7 +3911,7 @@ mod tests {
                 _ => m.prs[1].base_ref = "other".into(),
             }
             run(&mut m, &mut ledger, &[]);
-            assert_eq!(ledger.judged[&key(2, &head(2))].on, ["1@head1abcdef"], "{absent}: the record is kept");
+            assert_eq!(ledger.judged[&key(2, &head(2))].on, ["1@1abcdef111111111111111111111111111111111"], "{absent}: the record is kept");
             m.prs.retain(|p| p.number != 2);
             m.prs.push(PullRequest { body: "Shorter.\n\nIdea: none".into(), ..second });
             m.extra_results.push(stacked(2, "m0", "tree:m0", &[], 800));
@@ -3952,12 +3957,12 @@ mod tests {
         let review = gate_of(&out.open[0], "review");
         assert_eq!(review.status, GateStatus::Pending);
         assert!(review.detail.as_deref().unwrap().contains("bob were given before the gatekeeper had judged this commit"));
-        assert!(review.detail.as_deref().unwrap().contains("`/approve head1abcdef`"));
+        assert!(review.detail.as_deref().unwrap().contains("`/approve 1abcdef111111111111111111111111111111111`"));
         assert!(render_comment(&cfg(), &out.open[0]).contains("An approval counts only if it is given after this comment first appeared"));
         // The reviewer is told on the pull request, once.
         assert_eq!(m.posted.len(), 1);
-        assert!(m.posted[0].1.starts_with("@bob your approval of `head1abcde` does not count"));
-        assert!(m.posted[0].1.ends_with("`/approve head1abcdef`."));
+        assert!(m.posted[0].1.starts_with("@bob your approval of `1abcdef111` does not count"));
+        assert!(m.posted[0].1.ends_with("`/approve 1abcdef111111111111111111111111111111111`."));
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.posted.len(), 1);
         assert!(m.merged.is_empty());
@@ -3968,7 +3973,7 @@ mod tests {
         assert!(m.merged.is_empty());
 
         // Given again, by comment or by review, it counts.
-        m.pr_comments.insert(1, vec![says(1, "bob", "/approve head1abcdef", 0)]);
+        m.pr_comments.insert(1, vec![says(1, "bob", "/approve 1abcdef111111111111111111111111111111111", 0)]);
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.merged, [1]);
 
@@ -3995,7 +4000,7 @@ mod tests {
         // of its own yet: the failure may be #1's.
         let mut m = pair();
         m.extra_results.clear();
-        m.extra_results.push(failing(stacked(2, "m0", &after(1), &["1@head1abcdef"], 800), "compiles"));
+        m.extra_results.push(failing(stacked(2, "m0", &after(1), &["1@1abcdef111111111111111111111111111111111"], 800), "compiles"));
         m.active.insert(1);
         let mut ledger = Ledger::default();
         let out = run(&mut m, &mut ledger, &[]);
@@ -4016,7 +4021,7 @@ mod tests {
         // #1 passed, but at another commit than the one that was applied: undecided.
         let mut m = pair();
         m.extra_results.retain(|r| r.pr == 1);
-        m.extra_results.push(failing(stacked(2, "m0", &after(1), &["1@head1older"], 800), "compiles"));
+        m.extra_results.push(failing(stacked(2, "m0", &after(1), &["1@101de50111111111111111111111111111111111"], 800), "compiles"));
         let out = run(&mut m, &mut Ledger::default(), &[]);
         assert!(out.decided.is_empty());
     }
@@ -4077,7 +4082,7 @@ mod tests {
         m.extra_results.clear();
         m.extra_results.push(failing(stacked(1, "m0", "tree:m0", &[], 900), "compiles"));
         // Built with #1 applied first, so its build failed as well.
-        m.extra_results.push(failing(stacked(2, "m0", &after(1), &["1@head1abcdef"], 800), "compiles"));
+        m.extra_results.push(failing(stacked(2, "m0", &after(1), &["1@1abcdef111111111111111111111111111111111"], 800), "compiles"));
         m.reviews.insert(2, vec![approve("bob", &head(2))]);
         let mut ledger = Ledger::default();
         let out = run(&mut m, &mut ledger, &[]);
@@ -4107,7 +4112,7 @@ mod tests {
     fn a_chain_of_changes_merges_in_order_as_one_train() {
         let mut m = pair();
         m.prs.push(built_on(3, "erin", 2));
-        let mut third = stacked(3, "m0", &after(2), &["1@head1abcdef", "2@head2abcdef"], 700);
+        let mut third = stacked(3, "m0", &after(2), &["1@1abcdef111111111111111111111111111111111", "2@2abcdef222222222222222222222222222222222"], 700);
         third.base_metrics.tokens = 800;
         m.extra_results.push(third);
         let mut ledger = Ledger::default();
@@ -4136,7 +4141,7 @@ mod tests {
         m.prs.push(built_on(1, "alice", 2));
         m.prs.push(pr(2, "dave"));
         m.extra_results.push(stacked(2, "m0", "tree:m0", &[], 900));
-        m.extra_results.push(stacked(1, "m0", &after(2), &["2@head2abcdef"], 800));
+        m.extra_results.push(stacked(1, "m0", &after(2), &["2@2abcdef222222222222222222222222222222222"], 800));
         for n in [1, 2] {
             m.reviews.insert(n, vec![approve("bob", &head(n))]);
         }
@@ -4188,7 +4193,7 @@ mod tests {
         // that was judged on top of another.
         let mut m = pair();
         m.extra_results.retain(|r| r.pr != 2);
-        m.extra_results.push(on_tree(2, &after(1), &["1@head1abcdef"], true));
+        m.extra_results.push(on_tree(2, &after(1), &["1@1abcdef111111111111111111111111111111111"], true));
         let mut ledger = Ledger::default();
         run(&mut m, &mut ledger, &[]);
         for n in [1, 2] {
@@ -4200,7 +4205,7 @@ mod tests {
         // The same holds for any stacked result, with or without a `Depends` line.
         let mut m = two_stale();
         m.extra_results.push(stacked(1, "m0", "tree:m0", &[], 900));
-        let mut second = stacked(2, "m0", &after(1), &["1@head1abcdef"], 900);
+        let mut second = stacked(2, "m0", &after(1), &["1@1abcdef111111111111111111111111111111111"], 900);
         second.landing_tree = Some("tree:something-else".into());
         m.extra_results.push(second);
         run(&mut m, &mut Ledger::default(), &[]);
@@ -4278,12 +4283,12 @@ mod tests {
         }
 
         // The author pushes the fix; it is verified and approved, and merges.
-        m.prs[0].head_sha = "head1fixed".into();
+        m.prs[0].head_sha = "1f1ced0111111111111111111111111111111111".into();
         m.prs[0].labels = vec![LABEL_NEEDS_FIX.into()];
         let mut fixed = stacked(1, "m0", "tree:m0", &[], 900);
-        fixed.head_sha = "head1fixed".into();
+        fixed.head_sha = "1f1ced0111111111111111111111111111111111".into();
         m.extra_results.push(fixed);
-        m.reviews.insert(1, vec![approve("bob", "head1fixed")]);
+        m.reviews.insert(1, vec![approve("bob", "1f1ced0111111111111111111111111111111111")]);
         let out = run(&mut m, &mut ledger, &log);
         log.extend(out.decided.iter().cloned());
         assert_eq!(m.merged, [1]);
@@ -4457,9 +4462,9 @@ mod tests {
         let mut ledger = Ledger::default();
         let out = run(&mut m, &mut ledger, &[]);
         assert_eq!(out.open[0].status, AttemptStatus::NeedsFix);
-        assert!(render_comment(&cfg(), &out.open[0]).contains("`/waive-min head1abcdef <reason>`"));
+        assert!(render_comment(&cfg(), &out.open[0]).contains("`/waive-min 1abcdef111111111111111111111111111111111 <reason>`"));
 
-        let waive = says(1, "lead", "Worth it.\n/waive-min head1abcdef removes a statement that was wrong", 0);
+        let waive = says(1, "lead", "Worth it.\n/waive-min 1abcdef111111111111111111111111111111111 removes a statement that was wrong", 0);
         m.pr_comments.insert(1, vec![waive.clone()]);
         m.comments = vec![waive];
         let out = run(&mut m, &mut ledger, &[]);
@@ -4467,7 +4472,7 @@ mod tests {
         assert_eq!(out.open[0].status, AttemptStatus::Verifying);
         let waiver = out.open[0].waiver.clone().unwrap();
         assert_eq!((waiver.by.as_str(), waiver.reason.as_str()), ("lead", "removes a statement that was wrong"));
-        assert!(m.posted.iter().any(|(n, b)| *n == 1 && b.contains("is waived for commit head1abcdef by lead")));
+        assert!(m.posted.iter().any(|(n, b)| *n == 1 && b.contains("is waived for commit 1abcdef111111111111111111111111111111111 by lead")));
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.waived.len(), 1, "once per commit");
 
@@ -4488,17 +4493,17 @@ mod tests {
     #[test]
     fn a_waiver_does_not_survive_a_push() {
         let mut m = small();
-        m.pr_comments.insert(1, vec![says(1, "lead", "/waive-min head1abcdef small but right", 0)]);
+        m.pr_comments.insert(1, vec![says(1, "lead", "/waive-min 1abcdef111111111111111111111111111111111 small but right", 0)]);
         let mut ledger = Ledger::default();
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.waived.len(), 1);
 
         // A new commit, again below the minimum: the waiver named the other one.
-        m.prs[0].head_sha = "head1pushed".into();
+        m.prs[0].head_sha = "1b05bed111111111111111111111111111111111".into();
         let mut r = failing(stacked(1, "m0", "tree:m0", &[], 990), "improves");
-        r.head_sha = "head1pushed".into();
+        r.head_sha = "1b05bed111111111111111111111111111111111".into();
         m.extra_results.push(r);
-        m.reviews.insert(1, vec![approve("bob", "head1pushed")]);
+        m.reviews.insert(1, vec![approve("bob", "1b05bed111111111111111111111111111111111")]);
         let out = run(&mut m, &mut ledger, &[]);
         assert_eq!(out.open[0].status, AttemptStatus::NeedsFix);
         assert!(out.open[0].waiver.is_none());
@@ -4506,15 +4511,15 @@ mod tests {
 
         // Even a result that was judged with the lower minimum does not count
         // for a commit that has no waiver.
-        m.extra_results.retain(|r| r.head_sha != "head1pushed");
-        m.extra_results.push(waived_result("head1pushed"));
+        m.extra_results.retain(|r| r.head_sha != "1b05bed111111111111111111111111111111111");
+        m.extra_results.push(waived_result("1b05bed111111111111111111111111111111111"));
         let out = run(&mut m, &mut ledger, &[]);
         assert!(m.merged.is_empty());
         assert_eq!(out.open[0].status, AttemptStatus::NeedsFix);
         assert!(gate_of(&out.open[0], "improves").detail.as_deref().unwrap().contains("no waiver is in force"));
 
         // A new waiver for the new commit does.
-        m.pr_comments.get_mut(&1).unwrap().push(says(1, "lead", "/waive-min head1pushed still right", 1));
+        m.pr_comments.get_mut(&1).unwrap().push(says(1, "lead", "/waive-min 1b05bed111111111111111111111111111111111 still right", 1));
         run(&mut m, &mut ledger, &[]);
         assert_eq!(m.merged, [1]);
     }
@@ -4522,10 +4527,10 @@ mod tests {
     #[test]
     fn only_a_leader_can_waive_and_only_with_a_commit_and_a_reason() {
         for (who, text) in [
-            ("bob", "/waive-min head1abcdef a reviewer is not a leader"),
-            ("mallory", "/waive-min head1abcdef please"),
-            ("alice", "/waive-min head1abcdef my own change"),
-            ("lead", "/waive-min head1abcdef"),
+            ("bob", "/waive-min 1abcdef111111111111111111111111111111111 a reviewer is not a leader"),
+            ("mallory", "/waive-min 1abcdef111111111111111111111111111111111 please"),
+            ("alice", "/waive-min 1abcdef111111111111111111111111111111111 my own change"),
+            ("lead", "/waive-min 1abcdef111111111111111111111111111111111"),
             ("lead", "/waive-min because it is small"),
             ("lead", "/waive-min 0123456 another commit"),
         ] {
@@ -4539,14 +4544,14 @@ mod tests {
             assert!(m.waived.is_empty(), "{who}: {text}");
             assert_eq!(out.open[0].status, AttemptStatus::NeedsFix, "{who}: {text}");
             // A leader who got the form wrong is told the exact line; others get no answer.
-            assert_eq!(m.posted.iter().any(|(_, b)| b.contains("Usage: `/waive-min head1abcdef <reason>`")), who == "lead");
+            assert_eq!(m.posted.iter().any(|(_, b)| b.contains("Usage: `/waive-min 1abcdef111111111111111111111111111111111 <reason>`")), who == "lead");
         }
 
         // A leader cannot waive for a change from the leader's own account,
         // except in the bootstrap phase, as with reviews.
         let mut m = small();
         m.prs[0].author = "lead".into();
-        m.pr_comments.insert(1, vec![says(1, "lead", "/waive-min head1abcdef small but right", 0)]);
+        m.pr_comments.insert(1, vec![says(1, "lead", "/waive-min 1abcdef111111111111111111111111111111111 small but right", 0)]);
         run(&mut m, &mut Ledger::default(), &[]);
         assert!(m.waived.is_empty());
         let mut c = cfg();
