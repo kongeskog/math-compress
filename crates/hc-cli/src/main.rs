@@ -1,3 +1,4 @@
+mod analyze;
 mod gh;
 mod ops;
 mod precheck;
@@ -133,6 +134,12 @@ enum Cmd {
         #[arg(long, default_value = "")]
         site: String,
     },
+    /// Run a Lean analysis of the built project: what the final theorems do not reach,
+    /// or what parts of reached declarations nothing uses (candidates, to be checked by building).
+    Analyze {
+        #[command(subcommand)]
+        tool: AnalyzeTool,
+    },
     /// Write the site's project files: the invitation, the instructions, rules and config.
     Render {
         #[arg(long, default_value = ".")]
@@ -217,6 +224,35 @@ enum Cmd {
     },
 }
 
+#[derive(Subcommand)]
+enum AnalyzeTool {
+    /// Declarations of the project that the final theorems do not reach, with a token estimate.
+    Reach(AnalyzeArgs),
+    /// Unused structure fields, conjuncts of statements and hypotheses, and binders.
+    Unused(AnalyzeArgs),
+}
+
+#[derive(clap::Args)]
+struct AnalyzeArgs {
+    /// The repository root (with `hillclimb.toml`). Defaults to the enclosing git work tree.
+    #[arg(long)]
+    root: Option<PathBuf>,
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// Module to import (repeatable). Defaults to the first components of the theorem names.
+    #[arg(long = "import")]
+    imports: Vec<String>,
+    /// Root constant (repeatable). Defaults to `project.theorems`.
+    #[arg(long = "theorem")]
+    theorems: Vec<String>,
+    /// Write the full tab-separated list here (for `reach` with token columns added).
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// How many entries of each list to print.
+    #[arg(long, default_value_t = 40)]
+    top: usize,
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 enum Outcome {
     Pass,
@@ -261,6 +297,21 @@ fn main() -> Result<()> {
             };
             print!("{}", render::role_prompt(&role, &cfg, &site)?);
             Ok(())
+        }
+        Cmd::Analyze { tool } => {
+            let (tool, a) = match tool {
+                AnalyzeTool::Reach(a) => (analyze::Tool::Reach, a),
+                AnalyzeTool::Unused(a) => (analyze::Tool::Unused, a),
+            };
+            let o = analyze::Options {
+                root: a.root,
+                config: a.config,
+                imports: a.imports,
+                theorems: a.theorems,
+                out: a.out,
+                top: a.top,
+            };
+            analyze::analyze(tool, o)
         }
         Cmd::Render { root, out, site } => {
             let cfg = Config::load(&root.join("hillclimb.toml"))?;
