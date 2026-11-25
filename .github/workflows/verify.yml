@@ -268,8 +268,13 @@ jobs:
         if: steps.build.outputs.compiles == 'pass'
         uses: actions/cache@v4
         with:
-          path: ~/.cache/lean-ci-tools
-          key: hillclimb-tools-${{ hashFiles(format('work/{0}/lean-toolchain', inputs.dir), 'work/.github/scripts/comparator-check.sh') }}
+          # The checker is built with a toolchain of its own; keeping the
+          # installed toolchains with the tools means a run does not depend on
+          # downloading it again.
+          path: |
+            ~/.cache/lean-ci-tools
+            ~/.elan/toolchains
+          key: hillclimb-tools-v2-${{ hashFiles(format('work/{0}/lean-toolchain', inputs.dir), 'work/.github/scripts/comparator-check.sh') }}
 
       # Runs on the host, with tools the container could not reach. The checker
       # rebuilds and exports the solution inside its own sandbox and replays
@@ -280,12 +285,33 @@ jobs:
         working-directory: work/${{ inputs.dir }}
         env:
           LOG_DIR: ${{ runner.temp }}/comparator-logs
+        # Three outcomes. `pass`: the checker accepted every configuration.
+        # `fail`: the checker ran and did not accept. `error`: the checker
+        # could not be set up (a tool or toolchain could not be fetched or
+        # built), so the proof was never judged; that is retried here and, if
+        # it persists, gives no result at all rather than a verdict. The script
+        # prints its `== comparator <configuration>` line only once every tool
+        # is in place, and nothing from the pull request runs before that line.
         run: |
-          if bash ../.github/scripts/comparator-check.sh; then
-            echo "result=pass" >> "$GITHUB_OUTPUT"
-          else
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-          fi
+          result=error
+          for attempt in 1 2 3; do
+            set +e
+            bash ../.github/scripts/comparator-check.sh 2>&1 | tee "$RUNNER_TEMP/comparator-run.log"
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -eq 0 ]; then
+              result=pass
+              break
+            fi
+            if grep -q '^== comparator .* (log: ' "$RUNNER_TEMP/comparator-run.log"; then
+              result=fail
+              break
+            fi
+            echo "::warning::The checker could not be set up (attempt $attempt of 3); the proof was not judged."
+            [ "$attempt" -eq 3 ] || sleep 90
+          done
+          [ "$result" != error ] || echo "::error::The checker could not be set up; this run gives no result."
+          echo "result=$result" >> "$GITHUB_OUTPUT"
 
       - name: Save main's build
         if: inputs.pr == 0 && steps.build.outputs.compiles == 'pass' && steps.comparator.outputs.result == 'pass'
@@ -333,6 +359,13 @@ jobs:
           set -euo pipefail
           compiles="${COMPILES:-skip}"
           same="${SAME:-skip}"
+          # The checker could not be set up: the proof was never judged, so
+          # there is nothing to report. No result means no merge; the change is
+          # verified again on `/retry` or when main or its line moves.
+          if [ "$same" = error ]; then
+            echo "::warning::No result: the independent checker could not be set up."
+            exit 0
+          fi
           # A build job that died (timeout, crash) counts as a failed build.
           if [ "$BUILD_RESULT" = failure ] || [ "$BUILD_RESULT" = cancelled ]; then
             [ "$compiles" = pass ] || compiles=fail
@@ -342,7 +375,7 @@ jobs:
           hc finalize "${args[@]}"
           jq -r '.gates[] | "\(.status)\t\(.label)\t\(.detail // "")"' result.json | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
-        if: steps.dl.outcome == 'success'
+        if: steps.dl.outcome == 'success' && hashFiles('result.json') != ''
         with:
           name: hillclimb-result-${{ inputs.pr }}-${{ needs.static.outputs.head_sha }}
           path: result.json
