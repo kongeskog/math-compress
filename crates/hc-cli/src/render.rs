@@ -175,6 +175,7 @@ pub fn site_files(cfg: &Config, out: &Path, site: &str) -> Result<()> {
             {"command": "/retry", "who": "the author or a leader", "where": "a pull request", "does": "Run verification again."},
             {"command": "/approve <commit>", "who": "reviewers and leaders", "where": "a pull request", "does": "Approve exactly that commit."},
             {"command": "/request-changes <reason>", "who": "reviewers and leaders", "where": "a pull request", "does": "Block the change until the same reviewer approves."},
+            {"command": "/waive-min <commit> <reason>", "who": "leaders", "where": "a pull request", "does": "Accept a saving below the minimum for exactly that commit; it must still lower the score by at least 1."},
             {"command": "/accept", "who": "ideators and leaders", "where": "a proposed idea", "does": "Put the idea into the queue."},
             {"command": "/decline", "who": "ideators and leaders", "where": "a proposed idea or an application", "does": "Close it; give the reason in the same comment."},
             {"command": "/apply reviewer|ideator|leader", "who": "anyone with enough merged changes", "where": "any issue", "does": "Open an application for leaders to judge."},

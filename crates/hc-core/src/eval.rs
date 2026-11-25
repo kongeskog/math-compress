@@ -206,7 +206,10 @@ fn list(items: &[String], max: usize) -> String {
     s
 }
 
-/// The gates that can be decided without building: frozen, scope, deny, improves.
+/// The gates that can be decided without building: frozen, scope, deny,
+/// no_increase, improves. `deny` holds what is never allowed (forbidden
+/// constructs, protected declarations); `no_increase` holds the counts that
+/// may not grow (long lines, `no_increase` rules and their caps).
 pub fn static_gates(cfg: &Config, base: &Measurement, head: &Measurement) -> Result<Vec<Gate>> {
     let changed = changed_paths(base, head);
     let frozen = cfg.frozen_set()?;
@@ -252,8 +255,10 @@ pub fn static_gates(cfg: &Config, base: &Measurement, head: &Measurement) -> Res
         Gate::new("scope", GateStatus::Fail, problems.join("; "))
     });
 
-    // deny
+    // deny: constructs that are never allowed. A failure is a verdict.
     let mut problems = Vec::new();
+    // no_increase: counts that may not grow. The author repairs these with a push.
+    let mut grew = Vec::new();
     for rule in &cfg.deny {
         let h = head.deny.get(&rule.name).cloned().unwrap_or_default();
         let b = base.deny.get(&rule.name).cloned().unwrap_or_default();
@@ -261,7 +266,7 @@ pub fn static_gates(cfg: &Config, base: &Measurement, head: &Measurement) -> Res
             DenyMode::Forbid if h.count > 0 => {
                 problems.push(format!("`{}` is not allowed ({})", rule.name, list(&h.samples, 3)))
             }
-            DenyMode::NoIncrease if h.count > b.count => problems.push(format!(
+            DenyMode::NoIncrease if h.count > b.count => grew.push(format!(
                 "`{}` occurrences rose from {} to {}",
                 rule.name, b.count, h.count
             )),
@@ -269,7 +274,11 @@ pub fn static_gates(cfg: &Config, base: &Measurement, head: &Measurement) -> Res
         }
         if let Some(max) = rule.max_value {
             if h.max_value > max {
-                problems.push(format!("`{}` value {} exceeds the cap {}", rule.name, h.max_value, max));
+                let problem = format!("`{}` value {} exceeds the cap {}", rule.name, h.max_value, max);
+                match rule.mode {
+                    DenyMode::Forbid => problems.push(problem),
+                    DenyMode::NoIncrease => grew.push(problem),
+                }
             }
         }
     }
@@ -292,7 +301,7 @@ pub fn static_gates(cfg: &Config, base: &Measurement, head: &Measurement) -> Res
         }
     }
     if head.long_lines > base.long_lines {
-        problems.push(format!(
+        grew.push(format!(
             "lines longer than {} characters rose from {} to {} ({})",
             cfg.score.max_line_length,
             base.long_lines,
@@ -304,6 +313,11 @@ pub fn static_gates(cfg: &Config, base: &Measurement, head: &Measurement) -> Res
         Gate::new("deny", GateStatus::Pass, "")
     } else {
         Gate::new("deny", GateStatus::Fail, problems.join("; "))
+    });
+    gates.push(if grew.is_empty() {
+        Gate::new("no_increase", GateStatus::Pass, "")
+    } else {
+        Gate::new("no_increase", GateStatus::Fail, grew.join("; "))
     });
 
     // improves
@@ -504,7 +518,9 @@ mod tests {
             ("proj/A.lean", "set_option maxHeartbeats 100 in\ntheorem a : True := trivial\n"),
             ("README.md", "x"),
         ]);
-        assert_eq!(status(&g, "deny"), GateStatus::Fail);
+        // One more of a tolerated construct is repaired by a push, not a verdict.
+        assert_eq!(status(&g, "deny"), GateStatus::Pass);
+        assert_eq!(status(&g, "no_increase"), GateStatus::Fail);
     }
 
     #[test]
@@ -547,6 +563,7 @@ mod tests {
             ("proj/A.lean", "theorem a : True := trivial; theorem bb : True := a\n"),
             ("README.md", "x"),
         ]);
-        assert_eq!(status(&g, "deny"), GateStatus::Fail);
+        assert_eq!(status(&g, "deny"), GateStatus::Pass);
+        assert_eq!(status(&g, "no_increase"), GateStatus::Fail);
     }
 }

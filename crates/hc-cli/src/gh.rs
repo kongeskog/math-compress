@@ -106,6 +106,56 @@ impl GhForge {
         Ok(c)
     }
 
+    /// Descriptions of the open pull requests against the branch (drafts
+    /// excluded), for resolving `Depends` lines outside a gatekeeper pass.
+    pub fn open_bodies(&self) -> Result<BTreeMap<u64, String>> {
+        Ok(self
+            .list("pulls?state=open&per_page=100")?
+            .iter()
+            .filter(|p| s(&p["base"], "ref") == self.branch && !p["draft"].as_bool().unwrap_or(false))
+            .map(|p| (p["number"].as_u64().unwrap_or(0), s(p, "body")))
+            .collect())
+    }
+
+    /// Reservations in force, read from the issues alone: open ideas with
+    /// the queue's label that are assigned (the gatekeeper assigns an idea
+    /// to its claimant) and have a Reserves section.
+    pub fn reservations(&self, label: &str) -> Result<Vec<Reservation>> {
+        let mut out = Vec::new();
+        for i in self.list(&format!("issues?state=open&labels={label}&per_page=100"))? {
+            if i.get("pull_request").is_some() {
+                continue;
+            }
+            let Some(claimant) = i["assignees"].as_array().and_then(|a| a.first()).map(|a| s(a, "login")) else {
+                continue;
+            };
+            let patterns = reserves(&s(&i, "body"));
+            if !patterns.is_empty() {
+                out.push(Reservation { idea: i["number"].as_u64().unwrap_or(0), claimant, patterns });
+            }
+        }
+        Ok(out)
+    }
+
+    fn dispatch(&mut self, pr: u64, stack: &[u64], min_delta: Option<u64>) -> Result<()> {
+        let stack = stack.iter().map(u64::to_string).collect::<Vec<_>>().join(" ");
+        if self.dry_run {
+            eprintln!("dry-run: dispatch verify for #{pr} on [{stack}] (minimum: {min_delta:?})");
+            return Ok(());
+        }
+        let (pr_arg, stack_arg) = (format!("pr={pr}"), format!("stack={stack}"));
+        let mut args =
+            vec!["workflow", "run", &self.workflow, "-R", &self.repo, "--ref", &self.branch, "-f", &pr_arg, "-f", &stack_arg];
+        // Sent only when a minimum is waived, so that an arena whose workflow
+        // does not take the input yet keeps working for everything else.
+        let min_arg = min_delta.map(|m| format!("min_delta={m}"));
+        if let Some(m) = &min_arg {
+            args.extend(["-f", m.as_str()]);
+        }
+        self.gh(&args)?;
+        Ok(())
+    }
+
     fn trusted_run(&self, run_id: u64) -> Result<Option<String>> {
         let run = self.get(&format!("actions/runs/{run_id}"))?;
         let event = s(&run, "event");
@@ -309,16 +359,24 @@ impl Forge for GhForge {
     }
 
     fn dispatch_verify(&mut self, pr: u64, stack: &[u64]) -> Result<()> {
-        let stack = stack.iter().map(u64::to_string).collect::<Vec<_>>().join(" ");
-        if self.dry_run {
-            eprintln!("dry-run: dispatch verify for #{pr} on [{stack}]");
-            return Ok(());
+        self.dispatch(pr, stack, None)
+    }
+
+    fn dispatch_verify_min(&mut self, pr: u64, stack: &[u64], min_delta: u64) -> Result<()> {
+        self.dispatch(pr, stack, Some(min_delta))
+    }
+
+    fn changed_files(&mut self, pr: u64) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        for f in self.list(&format!("pulls/{pr}/files?per_page=100"))? {
+            out.push(s(&f, "filename"));
+            // A renamed file is touched under its old name too.
+            let previous = s(&f, "previous_filename");
+            if !previous.is_empty() {
+                out.push(previous);
+            }
         }
-        self.gh(&[
-            "workflow", "run", &self.workflow, "-R", &self.repo, "--ref", &self.branch, "-f",
-            &format!("pr={pr}"), "-f", &format!("stack={stack}"),
-        ])?;
-        Ok(())
+        Ok(out)
     }
 
     fn cancel_verifies(&mut self, prs: &BTreeSet<u64>) -> Result<()> {

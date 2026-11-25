@@ -31,6 +31,9 @@ pub struct Options {
     pub offline: bool,
     pub title: Option<String>,
     pub body_file: Option<PathBuf>,
+    /// The comparison was made against the change this one is built on
+    /// (`--depends-ref`), not against main.
+    pub on_dependency: bool,
 }
 
 const KEYWORDS: [&str; 8] = ["theorem", "lemma", "def", "abbrev", "structure", "inductive", "class", "instance"];
@@ -457,11 +460,26 @@ pub fn run(head: &Path, c: &Compared, o: &Options) -> Result<bool> {
         match (&o.title, &o.body_file) {
             (Some(title), Some(path)) => {
                 let body = std::fs::read_to_string(path)?;
-                let (gate, _) = hc_core::gate::format_check(&cfg.format, title, &body);
+                // Only the form of a `Depends` line can be checked here; the
+                // gatekeeper also checks that it names an open pull request.
+                let depends = hc_core::gate::depends_ref(&body);
+                let (gate, _) =
+                    hc_core::gate::format_check(&cfg.format, title, &body, depends.as_ref().err().map(String::as_str));
                 format_ok = gate.status == hc_core::model::GateStatus::Pass;
                 match gate.detail.as_deref() {
                     Some(d) if !format_ok => println!("  [FAIL] format - {d}"),
                     _ => println!("  [pass] format"),
+                }
+                match (depends, o.on_dependency) {
+                    (Ok(Some(n)), false) => {
+                        warnings += 1;
+                        println!("  [warn ] the description says `Depends: #{n}`, but everything above was compared with main: run again with --depends-ref <a ref of #{n}'s head>");
+                    }
+                    (Ok(None), true) => {
+                        warnings += 1;
+                        println!("  [warn ] --depends-ref was given, but the description has no `Depends: #<number>` line: the gatekeeper will compare with main");
+                    }
+                    _ => {}
                 }
                 for w in count_warnings(&body, changed.len()) {
                     warnings += 1;

@@ -1,5 +1,6 @@
 mod analyze;
 mod gh;
+mod landing;
 mod ops;
 mod precheck;
 mod render;
@@ -90,6 +91,51 @@ enum Cmd {
         /// Write the result as JSON.
         #[arg(long)]
         out: Option<PathBuf>,
+        /// For a change built on another open pull request (`Depends: #n`):
+        /// a git ref of that pull request's head, for example its branch or
+        /// `pull/<n>/head` after fetching it. The gates are then evaluated
+        /// against it, as the gatekeeper does, instead of against main.
+        #[arg(long, conflicts_with = "base")]
+        depends_ref: Option<String>,
+        /// Print the files that claimed ideas reserve (read with `gh`) and
+        /// warn if this change touches any of them.
+        #[arg(long)]
+        reservations: bool,
+        /// Judge the score with this minimum drop instead of the configured
+        /// one (the verify workflow passes it when a leader waived the minimum).
+        #[arg(long)]
+        min_delta: Option<u64>,
+        /// Git tree main will have when the stack and then this change land
+        /// as squashed commits, or `conflict` (set by the verify workflow).
+        #[arg(long)]
+        landing_tree: Option<String>,
+    },
+    /// Print the open pull requests a pull request is built on (its
+    /// `Depends` chain), the first to merge first, separated by spaces. The
+    /// verify workflow applies them before the change when it is given no stack.
+    Stack {
+        #[arg(long)]
+        pr: u64,
+        #[arg(long, default_value = "hillclimb.toml")]
+        config: PathBuf,
+    },
+    /// Print the git tree main will have once the stack and then the change
+    /// have landed as squashed commits, or `conflict` (used by the verify
+    /// workflow; a stacked result is merged from only if this is the tree
+    /// that was built).
+    Landing {
+        /// A clone that has every commit named.
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Commit of main the verification starts from.
+        #[arg(long)]
+        base: String,
+        /// Head commits of the changes applied first, in order (repeatable).
+        #[arg(long)]
+        stack: Vec<String>,
+        /// Head commit of the change.
+        #[arg(long)]
+        head: String,
     },
     /// Add the build outcome to a static result (used by the verify workflow).
     Finalize {
@@ -221,6 +267,11 @@ enum Cmd {
         /// A file holding the pull request's description.
         #[arg(long)]
         body_file: Option<PathBuf>,
+        /// For a change built on another open pull request (`Depends: #n`):
+        /// a git ref of that pull request's head; everything is then checked
+        /// against it instead of against main, as for `hc eval`.
+        #[arg(long, conflicts_with = "base")]
+        depends_ref: Option<String>,
     },
 }
 
@@ -280,8 +331,34 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Eval { head, base, base_ref, config, pr, head_sha, base_sha, base_tree, merged_tree, stack, author, author_open_prs, out } => {
-            eval_cmd(&head, base, base_ref, config, pr, head_sha, base_sha, (base_tree, merged_tree, stack), &author, author_open_prs, out)
+        Cmd::Eval {
+            head, base, base_ref, config, pr, head_sha, base_sha, base_tree, merged_tree, stack, author,
+            author_open_prs, out, depends_ref, reservations, min_delta, landing_tree,
+        } => {
+            let extra = EvalExtra { depends_ref, reservations, min_delta, landing_tree };
+            eval_cmd(&head, base, base_ref, config, pr, head_sha, base_sha, (base_tree, merged_tree, stack), &author, author_open_prs, out, extra)
+        }
+        Cmd::Landing { repo, base, stack, head } => {
+            println!("{}", landing::landing_tree(&repo, &base, &stack, &head)?);
+            Ok(())
+        }
+        Cmd::Stack { pr, config } => {
+            let cfg = Config::load(&config)?;
+            let forge = gh::GhForge::new(&cfg.project.repo, &cfg.project.branch, &cfg.build.workflow, true);
+            let bodies = forge.open_bodies()?;
+            let open: BTreeMap<u64, &str> = bodies.iter().map(|(n, b)| (*n, b.as_str())).collect();
+            // Nothing is known here about what has merged: a line that names
+            // a pull request which is not open gives no stack, and the
+            // gatekeeper decides what that means.
+            let dep = match open.get(&pr) {
+                Some(body) => hc_core::gate::dependency(pr, body, &open, &Default::default(), &cfg.project.branch),
+                None => Default::default(),
+            };
+            if let Some(problem) = &dep.problem {
+                eprintln!("{problem}");
+            }
+            println!("{}", dep.chain.iter().map(u64::to_string).collect::<Vec<_>>().join(" "));
+            Ok(())
         }
         Cmd::Finalize { static_result, compiles, same_theorems, build_seconds, out } => {
             finalize(&static_result, compiles, same_theorems, build_seconds, &out)
@@ -318,12 +395,13 @@ fn main() -> Result<()> {
             render::site_files(&cfg, &out, &site)
         }
         Cmd::Time { files, base, runs, command, jobs: _, markdown, head, base_ref, config } => {
-            let c = compare(&head, None, base_ref, config)?;
+            let c = compare(&head, None, base_ref, config, None, None)?;
             timing::run(&head, &c, &timing::Options { files, base, runs, command, markdown })
         }
-        Cmd::Precheck { head, base, base_ref, config, offline, title, body_file } => {
-            let c = compare(&head, base, base_ref, config)?;
-            let ok = precheck::run(&head, &c, &precheck::Options { offline, title, body_file })?;
+        Cmd::Precheck { head, base, base_ref, config, offline, title, body_file, depends_ref } => {
+            let on_dependency = depends_ref.is_some();
+            let c = compare(&head, base, base_ref, config, depends_ref, None)?;
+            let ok = precheck::run(&head, &c, &precheck::Options { offline, title, body_file, on_dependency })?;
             drop(c);
             if !ok {
                 std::process::exit(1);
@@ -378,6 +456,14 @@ fn export_ref(repo: &Path, reference: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// Options of `hc eval` beyond the comparison itself.
+struct EvalExtra {
+    depends_ref: Option<String>,
+    reservations: bool,
+    min_delta: Option<u64>,
+    landing_tree: Option<String>,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn eval_cmd(
     head: &Path,
@@ -391,8 +477,9 @@ fn eval_cmd(
     author: &str,
     author_open_prs: usize,
     out: Option<PathBuf>,
+    extra: EvalExtra,
 ) -> Result<()> {
-    let c = compare(head, base, base_ref, config)?;
+    let c = compare(head, base, base_ref, config, extra.depends_ref, extra.min_delta)?;
     let (cfg, b, h) = (&c.cfg, &c.base, &c.head);
     let mut gates = eval::static_gates(cfg, b, h)?;
     if !author.is_empty() {
@@ -411,8 +498,34 @@ fn eval_cmd(
             },
         );
     }
-    let changed = eval::changed_paths(b, h).len();
+    let changed_paths = eval::changed_paths(b, h);
+    let changed = changed_paths.len();
     let ok = report(&c, &gates);
+
+    if extra.reservations {
+        // Read from the arena's issues: an idea that is claimed is assigned
+        // to its claimant, and lists what it reserves in its description.
+        let forge = gh::GhForge::new(&cfg.project.repo, &cfg.project.branch, &cfg.build.workflow, true);
+        match forge.reservations(&cfg.ideas.label) {
+            Ok(list) if list.is_empty() => println!("\nNo files are reserved by a claimed idea."),
+            Ok(list) => {
+                println!("\nFiles reserved by claimed ideas:");
+                for r in &list {
+                    println!("  idea #{} (claimed by @{}): {}", r.idea, r.claimant, r.patterns.join(", "));
+                }
+                for r in &list {
+                    let hits = hc_core::gate::reserved_hits(&cfg.dir_prefix(), &r.patterns, &changed_paths);
+                    if !hits.is_empty() {
+                        println!(
+                            "\nWarning: this change {}. (Not a gate; ignore it if this is your own change for that idea.)",
+                            hc_core::gate::reservation_warning(r, &hits)
+                        );
+                    }
+                }
+            }
+            Err(e) => eprintln!("\nCould not read the reservations: {e:#}"),
+        }
+    }
 
     if let Some(out) = out {
         let result = VerifyResult {
@@ -422,6 +535,8 @@ fn eval_cmd(
             base_tree: trees.0,
             merged_tree: trees.1,
             stack: trees.2,
+            landing_tree: extra.landing_tree,
+            min_delta: Some(cfg.score.min_delta),
             metrics: h.metrics,
             base_metrics: b.metrics,
             gates,
@@ -484,11 +599,27 @@ fn report(c: &Compared, gates: &[Gate]) -> bool {
 
 /// Find the base (a checkout, or the point this branch left the base ref)
 /// and measure both sides.
-fn compare(head: &Path, base: Option<PathBuf>, base_ref: Option<String>, config: Option<PathBuf>) -> Result<Compared> {
+///
+/// `depends_ref` is for a change built on another open one (`Depends: #n`):
+/// a ref of that one's head, which is then the base, as it is for the
+/// gatekeeper. `min_delta` replaces the configured minimum step.
+fn compare(
+    head: &Path,
+    base: Option<PathBuf>,
+    base_ref: Option<String>,
+    config: Option<PathBuf>,
+    depends_ref: Option<String>,
+    min_delta: Option<u64>,
+) -> Result<Compared> {
     let (base_dir, temp) = match base {
         Some(b) => (b, false),
         None => {
-            let reference = base_ref.unwrap_or_else(|| arena_ref(head));
+            // A change built on another open one is measured against that
+            // one, as the gatekeeper measures it: its own difference only.
+            if let Some(dep) = &depends_ref {
+                println!("This change is built on another one ({dep}); the gates are evaluated against that, not against main.");
+            }
+            let reference = depends_ref.or(base_ref).unwrap_or_else(|| arena_ref(head));
             // Compare with the point this work branched from, so that commits
             // which landed on main since then are not mistaken for this change.
             let git = |args: &[&str]| {
@@ -509,7 +640,10 @@ fn compare(head: &Path, base: Option<PathBuf>, base_ref: Option<String>, config:
         }
     };
     // The configuration always comes from the base: a change cannot relax its own rules.
-    let cfg = Config::load(&config.unwrap_or_else(|| base_dir.join("hillclimb.toml")))?;
+    let mut cfg = Config::load(&config.unwrap_or_else(|| base_dir.join("hillclimb.toml")))?;
+    if let Some(min) = min_delta {
+        cfg.score.min_delta = min;
+    }
     let b = eval::measure(&base_dir, &cfg)?;
     let mut h = eval::measure(head, &cfg)?;
     if temp {
@@ -590,6 +724,73 @@ fn finalize(
     r.metrics.build_seconds = build_seconds;
     std::fs::write(out, serde_json::to_string_pretty(&r)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn command_line_is_well_formed() {
+        Cli::command().debug_assert();
+        // What the verify workflow passes.
+        let cli = Cli::try_parse_from([
+            "hc", "eval", "--head", "head", "--base", "stacked", "--config", "base/hillclimb.toml", "--pr", "12",
+            "--head-sha", "abc", "--base-sha", "def", "--base-tree", "t1", "--merged-tree", "t2",
+            "--landing-tree", "conflict", "--stack", "7@aaa", "--min-delta", "1", "--author", "x",
+            "--author-open-prs", "2", "--out", "static.json",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Cmd::Eval { landing_tree, min_delta, stack, .. } => {
+                assert_eq!(landing_tree.as_deref(), Some("conflict"));
+                assert_eq!(min_delta, Some(1));
+                assert_eq!(stack, ["7@aaa"]);
+            }
+            _ => panic!("not eval"),
+        }
+        assert!(Cli::try_parse_from(["hc", "eval", "--depends-ref", "origin/first", "--reservations"]).is_ok());
+        assert!(Cli::try_parse_from(["hc", "eval", "--base", "dir", "--depends-ref", "origin/first"]).is_err());
+        assert!(Cli::try_parse_from(["hc", "stack", "--pr", "12", "--config", "base/hillclimb.toml"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "hc", "landing", "--repo", "base", "--base", "m", "--stack", "a", "--stack", "b", "--head", "h"
+        ])
+        .is_ok());
+    }
+
+    /// The result an evaluation writes records the minimum it was judged
+    /// with and the tree as it will land, and has the gate for counts.
+    #[test]
+    fn a_result_records_the_minimum_it_was_judged_with() {
+        let dir = std::env::temp_dir().join(format!("hc-main-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let config = "[project]\nslug = \"t\"\ntitle = \"T\"\nrepo = \"o/r\"\ndir = \"proj\"\n[score]\nprimary = \"tokens\"\nmin_delta = 300\nguards = []\nmax_line_length = 100\nmax_build_ratio = 1.3\n";
+        for (side, source) in [("base", "theorem a : True := by\n  trivial\n"), ("head", "theorem a : True := trivial\n")] {
+            std::fs::create_dir_all(dir.join(side).join("proj")).unwrap();
+            std::fs::write(dir.join(side).join("proj/A.lean"), source).unwrap();
+            std::fs::write(dir.join(side).join("hillclimb.toml"), config).unwrap();
+        }
+        let run = |min_delta: Option<u64>| {
+            let out = dir.join("static.json");
+            let extra = EvalExtra { depends_ref: None, reservations: false, min_delta, landing_tree: Some("t2".into()) };
+            eval_cmd(
+                &dir.join("head"), Some(dir.join("base")), None, None, 1, "h".into(), "b".into(),
+                (Some("t1".into()), Some("t2".into()), vec![]), "", 0, Some(out.clone()), extra,
+            )
+            .unwrap();
+            serde_json::from_str::<VerifyResult>(&std::fs::read_to_string(out).unwrap()).unwrap()
+        };
+        let strict = run(None);
+        assert_eq!(strict.min_delta, Some(300));
+        assert_eq!(strict.gate("improves").unwrap().status, GateStatus::Fail);
+        assert_eq!(strict.landing_tree.as_deref(), Some("t2"));
+        assert!(strict.gate("no_increase").is_some());
+        let waived = run(Some(1));
+        assert_eq!(waived.min_delta, Some(1));
+        assert_eq!(waived.gate("improves").unwrap().status, GateStatus::Pass);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 fn read_jsonl<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<T>> {

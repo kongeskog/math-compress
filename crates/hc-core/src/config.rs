@@ -367,11 +367,19 @@ impl Default for Review {
 pub struct Ideas {
     pub label: String,
     pub lease_hours: i64,
+    /// An idea whose estimated saving is above this many tokens needs a
+    /// Trial section before it enters the queue. 0 turns the rule off.
+    #[serde(default = "default_trial_above")]
+    pub trial_above: u64,
+}
+
+fn default_trial_above() -> u64 {
+    1000
 }
 
 impl Default for Ideas {
     fn default() -> Self {
-        Ideas { label: "idea".into(), lease_hours: 3 }
+        Ideas { label: "idea".into(), lease_hours: 3, trial_above: default_trial_above() }
     }
 }
 

@@ -85,22 +85,42 @@ impl Gate {
     }
 }
 
-/// Every gate, in display order, with its label and what it protects.
-pub const GATES: &[(&str, &str, &str)] = &[
-    ("format", "Standard title and description", "The title follows `technique(scope): summary` and the description names the idea it implements, so every change can be identified and grouped."),
-    ("quota", "Within the open-change limit", "One author may have only a limited number of changes in verification at once, so the build queue stays available to everyone."),
-    ("frozen", "Frozen files untouched", "The statement of the theorems, the toolchain, the dependency pins and the harness configuration must be byte-identical to the main branch."),
-    ("scope", "Changes stay in scope", "Only files inside the project directory may change."),
-    ("deny", "No banned constructs", "No new axioms, no unchecked native evaluation, no escape hatches, no code that runs during the build, no private macro languages, no raised resource limits, and no protected declaration removed."),
-    ("improves", "Score improves", "The primary metric must drop by at least the minimum step and no guard metric may rise beyond its tolerance."),
-    ("compiles", "Project compiles", "The full project builds on the pinned toolchain with no unfinished proofs."),
-    ("same_theorems", "Same theorems proved", "An independent checker with a second proof kernel confirms the original theorem statements are still proved from the standard axioms only."),
-    ("fresh", "Verified on current main", "The verification ran on top of the latest main branch."),
-    ("review", "Independent review", "Approved by a vetted reviewer other than the author."),
+/// What a failed gate means for the change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnFail {
+    /// The author can repair it with a push or an edit. The change stays
+    /// open as "needs a fix" and nothing is written to the attempts log.
+    Fix,
+    /// A verdict on the commit: the attempt is recorded as rejected.
+    Reject,
+    /// Not a failure of the change: it waits (for main, or for a reviewer).
+    Wait,
+}
+
+/// Every gate, in display order, with its label, what it protects, and what
+/// its failure means. This table is the one place that classifies gates.
+pub const GATES: &[(&str, &str, &str, OnFail)] = &[
+    ("format", "Standard title and description", "The title follows `technique(scope): summary` and the description names the idea it implements (and, if it is built on another open change, that change), so every change can be identified and grouped.", OnFail::Fix),
+    ("quota", "Within the open-change limit", "One author may have only a limited number of changes in verification at once, so the build queue stays available to everyone.", OnFail::Fix),
+    ("frozen", "Frozen files untouched", "The statement of the theorems, the toolchain, the dependency pins and the harness configuration must be byte-identical to the main branch.", OnFail::Reject),
+    ("scope", "Changes stay in scope", "Only files inside the project directory may change.", OnFail::Reject),
+    ("deny", "No banned constructs", "No new axioms, no unchecked native evaluation, no escape hatches, no code that runs during the build, and no protected declaration removed.", OnFail::Reject),
+    ("no_increase", "No more long lines or exceptions", "The number of lines over the length limit, and of constructs the project tolerates but wants no more of (private macro languages, raised resource limits), may not grow.", OnFail::Fix),
+    ("improves", "Score improves", "The primary metric must drop by at least the minimum step and no guard metric may rise beyond its tolerance.", OnFail::Fix),
+    ("compiles", "Project compiles", "The full project builds on the pinned toolchain with no unfinished proofs.", OnFail::Reject),
+    ("same_theorems", "Same theorems proved", "An independent checker with a second proof kernel confirms the original theorem statements are still proved from the standard axioms only.", OnFail::Reject),
+    ("fresh", "Verified on current main", "The verification ran on top of the latest main branch.", OnFail::Wait),
+    ("review", "Independent review", "Approved by a vetted reviewer other than the author.", OnFail::Wait),
 ];
 
 pub fn gate_label(key: &str) -> &'static str {
     GATES.iter().find(|g| g.0 == key).map(|g| g.1).unwrap_or("Gate")
+}
+
+/// What a failure of this gate means. A gate this table does not know is a
+/// verdict: nothing unknown is ever treated as a small matter.
+pub fn gate_on_fail(key: &str) -> OnFail {
+    GATES.iter().find(|g| g.0 == key).map(|g| g.3).unwrap_or(OnFail::Reject)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +147,19 @@ pub struct VerifyResult {
     /// `pr@head_sha` of the changes that were applied before this one.
     #[serde(default)]
     pub stack: Vec<String>,
+    /// Git tree main will have if the changes in `stack` land one after
+    /// another as squashed commits and this change is then merged, or
+    /// `conflict` if that sequence does not merge cleanly. It can differ
+    /// from `merged_tree` only when this change's branch contains commits of
+    /// a change in the stack. A stacked result may be merged from only when
+    /// the two are equal.
+    #[serde(default)]
+    pub landing_tree: Option<String>,
+    /// The minimum drop the `improves` gate was judged with. Every result
+    /// written since stacked changes were introduced records it, so its
+    /// presence also marks a result in the current format.
+    #[serde(default)]
+    pub min_delta: Option<u64>,
     pub metrics: Metrics,
     pub base_metrics: Metrics,
     pub gates: Vec<Gate>,
@@ -150,8 +183,18 @@ pub enum AttemptStatus {
     AwaitingReview,
     Stale,
     Conflict,
+    /// A gate failed that the author can fix with a push or an edit. The
+    /// change stays open; this is never written to the attempts log.
+    NeedsFix,
     Merged,
     Rejected,
+}
+
+/// A leader's waiver of the minimum step for one commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Waiver {
+    pub by: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,6 +230,21 @@ pub struct Attempt {
     pub technique: Option<String>,
     #[serde(default)]
     pub scope: Option<String>,
+    /// Open pull requests this change is built on (`Depends: #n`), the
+    /// first to merge first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends: Vec<u64>,
+    /// `pr@head_sha` of the changes that were applied before this one in
+    /// the verification the metrics and gates shown come from. Empty when
+    /// they were measured against main alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub measured_on: Vec<String>,
+    /// Notes that never fail a gate, such as files reserved by an idea.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    /// Set when a leader waived the minimum step for this commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiver: Option<Waiver>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -298,6 +356,12 @@ pub struct Ledger {
     /// Issues that were already told their title or body is malformed.
     #[serde(default)]
     pub format_notified: std::collections::BTreeSet<u64>,
+    /// `pr@head_sha` -> the open pull requests that commit was judged on top
+    /// of (its `Depends` chain, the first to merge first). Kept so that the
+    /// line cannot be dropped or changed under a commit that was reviewed as
+    /// a change on top of another.
+    #[serde(default)]
+    pub depends: BTreeMap<String, Vec<u64>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
