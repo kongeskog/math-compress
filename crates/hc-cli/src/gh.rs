@@ -650,9 +650,13 @@ fn bot_login() -> String {
 /// is neither read (its time would be taken for the gatekeeper's statement)
 /// nor overwritten.
 fn own_gate_comment<'a>(comments: &'a [Value], login: &str) -> Option<&'a Value> {
+    // The Actions token comments as a bot. A login given by `HC_BOT_LOGIN`
+    // may be a person's (a gatekeeper run with a personal token), so there
+    // the login alone decides.
+    let any_kind = !login.eq_ignore_ascii_case("github-actions[bot]");
     comments.iter().find(|c| {
         s(c, "body").starts_with(COMMENT_MARKER)
-            && s(&c["user"], "type") == "Bot"
+            && (any_kind || s(&c["user"], "type") == "Bot")
             && s(&c["user"], "login").eq_ignore_ascii_case(login)
     })
 }
@@ -661,6 +665,17 @@ fn own_gate_comment<'a>(comments: &'a [Value], login: &str) -> Option<&'a Value>
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_gatekeeper_run_under_a_named_login_finds_its_comment_whatever_kind_of_account() {
+        let gate = format!("{COMMENT_MARKER} <!-- abc; on main -->\n### Hillclimb gate");
+        let comments = vec![
+            json!({"id": 1, "body": gate, "user": {"login": "mallory", "type": "User"}}),
+            json!({"id": 2, "body": gate, "user": {"login": "keeper", "type": "User"}}),
+        ];
+        assert_eq!(own_gate_comment(&comments, "keeper").map(|c| c["id"].as_i64()), Some(Some(2)));
+        assert!(own_gate_comment(&comments, "github-actions[bot]").is_none());
+    }
 
     #[test]
     fn the_gate_comment_is_the_gatekeepers_own() {
