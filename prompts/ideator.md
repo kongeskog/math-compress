@@ -33,7 +33,7 @@ The title is `Idea: ` followed by {{title_format}}. Example: `Idea: merge(Nc/Tow
 
 The body must have these four sections, each starting with its name in bold: **Targets**, **Technique**, **How to check**, **Estimated saving**. Add **Risk** if there is one.
 
-A fifth section, **Trial**, is required when the estimate is large: if the largest number in **Estimated saving** is above the arena's threshold (`ideas.trial_above` in `hillclimb.toml`, 1000 tokens unless the arena changed it), say in **Trial** what you ported or measured on one file or case and the saving you measured there. Without it the idea does not enter the queue.
+{{trial_rule}}
 
 Optionally add **Reserves**: the files or folders the work will rewrite, each in backticks (paths or globs, for example `Paper/Tree` or `Nc/*.lean`). While the idea is claimed, every other open pull request that touches one of them gets a warning to coordinate on the idea; list only what will really be rewritten.
 

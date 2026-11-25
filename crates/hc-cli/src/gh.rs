@@ -366,6 +366,25 @@ impl Forge for GhForge {
         self.dispatch(pr, stack, Some(min_delta))
     }
 
+    fn changed_between(&mut self, base: &str, head: &str) -> Result<Vec<String>> {
+        // Three dots: compared with the common ancestor, as a pull request is.
+        // One page holds up to 300 files; a longer list is not trusted.
+        let v = self.get(&format!("compare/{base}...{head}"))?;
+        let files = v["files"].as_array().context("no file list in the comparison")?;
+        if files.len() >= 300 {
+            bail!("the comparison lists too many files to be complete");
+        }
+        let mut out = Vec::new();
+        for f in files {
+            out.push(s(f, "filename"));
+            let previous = s(f, "previous_filename");
+            if !previous.is_empty() {
+                out.push(previous);
+            }
+        }
+        Ok(out)
+    }
+
     fn changed_files(&mut self, pr: u64) -> Result<Vec<String>> {
         let mut out = Vec::new();
         for f in self.list(&format!("pulls/{pr}/files?per_page=100"))? {

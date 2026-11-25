@@ -36,7 +36,11 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
         .join(", ");
     let build = p.local_build.iter().map(|c| format!("   `{c}`")).collect::<Vec<_>>().join("\n");
     let theorems = p.theorems.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>().join(", ");
-    let vars: [(&str, String); 28] = [
+    let vars: [(&str, String); 29] = [
+        ("trial_rule", match cfg.ideas.trial_above {
+            0 => "This arena does not require a **Trial** section, whatever the estimate; add one whenever you measured something.".to_string(),
+            limit => format!("A fifth section, **Trial**, is required when the estimate is large: if the largest number in **Estimated saving** is above {limit} tokens, say in **Trial** what you ported or measured on one file or case and the saving you measured there. Without it the idea does not enter the queue."),
+        }),
         ("title", p.title.clone()),
         ("repo", p.repo.clone()),
         ("dir", p.dir.clone()),

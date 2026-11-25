@@ -130,6 +130,10 @@ pub trait Forge {
     fn dispatch_verify_min(&mut self, pr: u64, stack: &[u64], min_delta: u64) -> Result<()>;
     /// Paths a pull request changes, relative to the repository root.
     fn changed_files(&mut self, pr: u64) -> Result<Vec<String>>;
+    /// Paths that differ between two commits, `head` compared with the point
+    /// where it left `base`. For a change built on another one this is its
+    /// own difference, without the other's files.
+    fn changed_between(&mut self, base: &str, head: &str) -> Result<Vec<String>>;
     /// Stop the verifications of these changes that are queued or running.
     fn cancel_verifies(&mut self, prs: &BTreeSet<u64>) -> Result<()>;
     fn reviews(&mut self, pr: u64) -> Result<Vec<ReviewInfo>>;
@@ -669,6 +673,23 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 // This commit was judged, and perhaps approved, as a change on
                 // top of `was`. Its description cannot quietly turn it into a
                 // change on main that carries `was` along unreviewed.
+                //
+                // What this does not cover: the pin exists from the first pass
+                // that sees this commit with the line (and that pass must get
+                // as far as saving the ledger). If the line is removed before
+                // that, the commit was never pinned and is an ordinary change
+                // on main. That cannot merge an unapproved commit or an
+                // unverified tree: every gate is then evaluated against main
+                // for the whole branch, the other change's content included
+                // (also the file count behind the large-change rule), and the
+                // approval has to be for this very commit, which contains the
+                // other change's commits. What it can do is merge on an
+                // approval whose reviewer read the description with the line
+                // in the moments before the first pass, when the bot had not
+                // yet said "Depends on" and the pull request's diff showed
+                // both changes. Reviewers are told to read a change as a
+                // difference only when the bot's comment says so, and that
+                // comment is written in the pass that records the pin.
                 if dep.problem.is_none() && dep.direct != Some(was) && !landed.contains(&was) {
                     dep = Dependency {
                         direct: dep.direct,
@@ -1365,7 +1386,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         bootstrap: bool,
     ) -> Vec<String> {
         let mut out = Vec::new();
-        let mut files: Option<Vec<String>> = None;
+        let mut files: Option<(Vec<String>, bool)> = None;
         for r in reservations {
             let implements = |p: &PullRequest| {
                 p.author.eq_ignore_ascii_case(&r.claimant) && idea_ref(&p.body) == Some(r.idea)
@@ -1377,10 +1398,29 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
             if chain.iter().any(|d| prs.iter().any(|p| p.number == *d && implements(p))) {
                 continue;
             }
-            let files = files.get_or_insert_with(|| self.forge.changed_files(pr.number).unwrap_or_default());
+            // The pull request's file list is its difference from main. For a
+            // change built on another one that includes the other's files, so
+            // its own difference is asked for: from the head of what it is
+            // built on to its own head. If that cannot be had, the full list
+            // is used and the warning says so.
+            let (files, own) = files.get_or_insert_with(|| {
+                let on = chain.last().and_then(|d| prs.iter().find(|p| p.number == *d));
+                match on.map(|p| self.forge.changed_between(&p.head_sha, &pr.head_sha)) {
+                    Some(Ok(own)) => (own, true),
+                    None => (self.forge.changed_files(pr.number).unwrap_or_default(), true),
+                    Some(Err(_)) => (self.forge.changed_files(pr.number).unwrap_or_default(), false),
+                }
+            });
             let hits = reserved_hits(&self.cfg.dir_prefix(), &r.patterns, files);
             if !hits.is_empty() {
-                out.push(reservation_warning(r, &hits));
+                let mut warning = reservation_warning(r, &hits);
+                if !*own {
+                    warning.push_str(&format!(
+                        " (the list may include files changed only by {}, which this change is built on)",
+                        refs(chain)
+                    ));
+                }
+                out.push(warning);
             }
         }
         out
@@ -2217,6 +2257,8 @@ mod tests {
         created: Vec<String>,
         /// Paths each pull request changes.
         files: BTreeMap<u64, Vec<String>>,
+        /// Paths that differ between two commits, where that is known.
+        between: BTreeMap<(String, String), Vec<String>>,
         /// Verifications dispatched with a waived minimum: (pull request, minimum).
         waived: Vec<(u64, u64)>,
         /// Text of the latest commit status of each head.
@@ -2267,6 +2309,9 @@ mod tests {
         }
         fn changed_files(&mut self, pr: u64) -> Result<Vec<String>> {
             Ok(self.files.get(&pr).cloned().unwrap_or_default())
+        }
+        fn changed_between(&mut self, base: &str, head: &str) -> Result<Vec<String>> {
+            self.between.get(&(base.to_string(), head.to_string())).cloned().ok_or_else(|| anyhow::anyhow!("not known"))
         }
         fn cancel_verifies(&mut self, prs: &BTreeSet<u64>) -> Result<()> {
             self.cancelled.extend(prs);
@@ -3685,6 +3730,34 @@ mod tests {
         m.files.insert(1, vec!["proj/Paper/Tree.lean".into()]);
         let out = run(&mut m, &mut Ledger::default(), &[]);
         assert!(open(&out, 1).warnings.is_empty());
+    }
+
+    #[test]
+    fn a_change_built_on_another_is_warned_only_for_the_files_it_changes_itself() {
+        // #1 touches the reserved file; #2 is built on #1 and touches another
+        // file, but as a pull request against main it lists both.
+        let mut m = pair();
+        m.issues.push(reserving(7, "`Paper/Tree`"));
+        let mut ledger = Ledger::default();
+        ledger.claims.insert(7, Claim { login: "alice".into(), at: t(-1) });
+        m.prs[0].author = "erin".into();
+        m.files.insert(1, vec!["proj/Paper/Tree.lean".into()]);
+        m.files.insert(2, vec!["proj/Paper/Tree.lean".into(), "proj/Nc/A.lean".into()]);
+        m.between.insert((head(1), head(2)), vec!["proj/Nc/A.lean".into()]);
+        let out = run(&mut m, &mut ledger, &[]);
+        assert_eq!(open(&out, 1).warnings.len(), 1);
+        assert!(open(&out, 2).warnings.is_empty(), "only #1 changes the reserved file");
+
+        // It changes the reserved file itself: warned.
+        m.between.insert((head(1), head(2)), vec!["proj/Paper/Tree.lean".into()]);
+        let out = run(&mut m, &mut ledger, &[]);
+        assert_eq!(open(&out, 2).warnings.len(), 1);
+        assert!(!open(&out, 2).warnings[0].contains("may include"));
+
+        // Its own difference cannot be had: the full list is used, and the warning says so.
+        m.between.clear();
+        let out = run(&mut m, &mut ledger, &[]);
+        assert!(open(&out, 2).warnings[0].ends_with("(the list may include files changed only by #1, which this change is built on)"));
     }
 
     #[test]
