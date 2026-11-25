@@ -134,6 +134,10 @@ enum Cmd {
         /// Head commits of the changes applied first, in order (repeatable).
         #[arg(long)]
         stack: Vec<String>,
+        /// The git tree the verification applied the change to (main with the
+        /// stack applied as real merges). The squashed stack must give it.
+        #[arg(long)]
+        stacked_tree: String,
         /// Head commit of the change.
         #[arg(long)]
         head: String,
@@ -388,8 +392,8 @@ fn main() -> Result<()> {
             let extra = EvalExtra { depends_ref, reservations, min_delta, landing_tree };
             eval_cmd(&head, base, base_ref, config, pr, head_sha, base_sha, (base_tree, merged_tree, stack), &author, author_open_prs, out, extra)
         }
-        Cmd::Landing { repo, base, stack, head } => {
-            println!("{}", landing::landing_tree(&repo, &base, &stack, &head)?);
+        Cmd::Landing { repo, base, stack, stacked_tree, head } => {
+            println!("{}", landing::landing_tree(&repo, &base, &stack, &stacked_tree, &head)?);
             Ok(())
         }
         Cmd::Stack { pr, config } => {
@@ -831,7 +835,7 @@ mod tests {
         assert!(Cli::try_parse_from(["hc", "eval", "--base", "dir", "--depends-ref", "origin/first"]).is_err());
         assert!(Cli::try_parse_from(["hc", "stack", "--pr", "12", "--config", "base/hillclimb.toml"]).is_ok());
         assert!(Cli::try_parse_from([
-            "hc", "landing", "--repo", "base", "--base", "m", "--stack", "a", "--stack", "b", "--head", "h"
+            "hc", "landing", "--repo", "base", "--base", "m", "--stack", "a", "--stack", "b", "--stacked-tree", "t", "--head", "h"
         ])
         .is_ok());
     }

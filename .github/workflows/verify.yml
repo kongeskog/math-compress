@@ -144,13 +144,16 @@ jobs:
           # contains commits of a change ahead of it, merging it after that
           # squash is another merge, which can conflict or give another tree.
           # So the tree is computed that way too, and the gatekeeper merges
-          # from this result only if both are the same tree.
+          # from this result only if both are the same tree. The squashed
+          # stack must itself give the tree of `stacked`, which the build
+          # starts from; if it does not, the answer is `conflict`.
           landing_tree="$(git -C head rev-parse 'HEAD^{tree}')"
           if [ "$conflict" = false ] && [ -n "${stack_shas# }" ]; then
             landing_args=""
             for sha in $stack_shas; do landing_args="$landing_args --stack $sha"; done
             # shellcheck disable=SC2086  # a list of `--stack <sha>` pairs built above
-            landing_tree="$(hc landing --repo base --base "$base_sha" $landing_args --head "$head_sha")"
+            landing_tree="$(hc landing --repo base --base "$base_sha" $landing_args \
+              --stacked-tree "$(git -C stacked rev-parse 'HEAD^{tree}')" --head "$head_sha")"
           fi
           {
             echo "base_sha=$base_sha"
