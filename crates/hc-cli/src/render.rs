@@ -35,7 +35,7 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
         .join(", ");
     let build = p.local_build.iter().map(|c| format!("   `{c}`")).collect::<Vec<_>>().join("\n");
     let theorems = p.theorems.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>().join(", ");
-    let vars: [(&str, String); 23] = [
+    let vars: [(&str, String); 25] = [
         ("title", p.title.clone()),
         ("repo", p.repo.clone()),
         ("dir", p.dir.clone()),
@@ -57,10 +57,29 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
             "techniques",
             bullets(cfg.format.techniques.iter().map(|t| format!("`{}`: {}", t.key, t.description))),
         ),
-        (
-            "protect",
-            bullets(cfg.protect.iter().map(|p| if p.description.is_empty() { p.name.clone() } else { p.description.clone() })),
-        ),
+        ("protect_contributor", {
+            let b = protect_bullets(cfg);
+            if b.is_empty() {
+                "Nothing else is protected. Whatever those theorems do not need may be deleted, and the statement of any intermediate result may change, as long as they stay proved.".to_string()
+            } else {
+                format!("Protected, may be re-proved but never removed:\n{b}")
+            }
+        }),
+        ("protect_ideator", {
+            let b = protect_bullets(cfg);
+            if b.is_empty() {
+                "Nothing besides those files and the final theorems is protected: a declaration, a clause of a statement or a whole file that the final theorems do not need is a valid target.".to_string()
+            } else {
+                format!("These declarations are protected and cannot be removed, so do not propose removing them:\n{b}")
+            }
+        }),
+        ("protect_reviewer", {
+            if cfg.protect.is_empty() {
+                String::new()
+            } else {
+                "\n- A protected statement whose meaning changed: the gate compares its text, but a changed definition it mentions changes what it says.".to_string()
+            }
+        }),
         (
             "bootstrap_note",
             if cfg.roles.bootstrap {
@@ -173,4 +192,8 @@ pub fn site_files(cfg: &Config, out: &Path, site: &str) -> Result<()> {
     });
     std::fs::write(out.join("config.json"), serde_json::to_string_pretty(&config)?)?;
     Ok(())
+}
+
+fn protect_bullets(cfg: &Config) -> String {
+    bullets(cfg.protect.iter().map(|p| if p.description.is_empty() { p.name.clone() } else { p.description.clone() }))
 }

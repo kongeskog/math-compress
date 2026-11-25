@@ -33,7 +33,6 @@ The body must have these four sections, each starting with its name in bold: **T
 
 An idea that does not follow this is not picked up; a bot comment says what is missing, and editing the issue fixes it. A well-formed idea from a newcomer is marked `idea:proposed` until a vetted ideator or a leader accepts it with `/accept`; ideas from vetted ideators go straight into the queue. After {{ideator_min_merged}} merged change you can ask to become one with `/apply ideator`.
 
-These declarations are protected and cannot be removed, so do not propose removing them:
-{{protect}}
+{{protect_ideator}}
 
 One idea per issue. Do not claim ideas you file unless you intend to do the work.

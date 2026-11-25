@@ -34,8 +34,7 @@ Only files under `{{dir}}/` may change. The theorems that must stay proved, with
 Banned:
 {{deny}}
 
-Protected, may be re-proved but never removed:
-{{protect}}
+{{protect_contributor}}
 
 Also banned, and checked by a reviewer: obfuscation, unreadable names, packing unrelated steps into one line, changes that make the build print new warnings (for example deleting an option that silences a linter instead of fixing what it reports), or anything that lowers the number without making the proof genuinely simpler.
 

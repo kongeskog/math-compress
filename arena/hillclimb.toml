@@ -65,12 +65,11 @@ min_account_age_days = 30
 [limits]
 max_open_prs = 4
 
-# Statements of the paper. Their proofs may change; their statements may not,
-# and they cannot be removed, so the formalization keeps mirroring the paper.
-[[protect]]
-name = "paper statements"
-pattern = '''(?m)^\s*(?:@\[[^\]]*\]\s*)*(?:(?:private|protected|noncomputable)\s+)*(?:theorem|lemma)\s+((?:_root_\.)?(?:[A-Za-z0-9_]+\.)*(?:thm|lem|prop|cor|def)_[A-Za-z0-9_']+)'''
-description = "Theorems named after numbered statements of the paper (`thm_*`, `lem_*`, `prop_*`, `cor_*`, `def_*`): the proof may change, the statement may not, and they cannot be removed."
+# Nothing besides the frozen files is protected. The goal is the shortest proof
+# of the final theorems: any declaration, clause or file they do not need may
+# be removed, and statements of intermediate results may change. (Until
+# 25 Nov 2026 a `[[protect]]` rule kept every theorem named after a numbered
+# statement of the paper; the owner lifted it.)
 
 [ideas]
 label = "idea"
