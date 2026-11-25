@@ -1337,7 +1337,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                     attempt.decided_at = Some(self.now);
                     attempt.merge_sha = Some(merge_sha.clone());
                     self.forge.set_label(pr.number, LABEL_READY, false)?;
-                    self.forge.upsert_comment(pr.number, &render_comment(self.cfg, &attempt))?;
+                    self.forge.upsert_comment(pr.number, &self.comment_text(pr, &attempt, ledger))?;
                     main = merge_sha.clone();
                     main_tree = self.forge.main_tree()?;
                     landed.insert(pr.number);
@@ -1504,11 +1504,35 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         ledger: &mut Ledger,
     ) -> Result<()> {
         self.forge.set_status(&pr.head_sha, state, text)?;
-        let stated = self.forge.upsert_comment(pr.number, &render_comment(self.cfg, attempt))?;
+        let stated = self.forge.upsert_comment(pr.number, &self.comment_text(pr, attempt, ledger))?;
         if let Some(record) = ledger.judged.get_mut(&key(pr.number, &pr.head_sha)) {
             record.at.get_or_insert(stated);
         }
         Ok(())
+    }
+
+    /// The bot's comment as it is written: the rendered attempt, with the
+    /// commit and what it is judged on in the first line, after the marker:
+    /// `<!-- hillclimb-gate --> <!-- <head>; on <n@head+… or the branch>[; depends #n] -->`.
+    ///
+    /// The forge keeps a comment's time when the same text is written again,
+    /// and that time is what approvals are measured against. With the commit
+    /// and the basis in the text, the same text can only be a statement about
+    /// the same commit on the same basis; after a push, or when the basis
+    /// changes, the comment is written anew and gets a new time, whatever the
+    /// rest of it says.
+    fn comment_text(&self, pr: &PullRequest, attempt: &Attempt, ledger: &Ledger) -> String {
+        let record = ledger.judged.get(&key(pr.number, &pr.head_sha));
+        let on = match record {
+            Some(r) if !r.on.is_empty() => r.on.join("+"),
+            _ => self.cfg.project.branch.clone(),
+        };
+        let names = record.and_then(|r| r.names).map(|n| format!("; depends #{n}")).unwrap_or_default();
+        render_comment(self.cfg, attempt).replacen(
+            COMMENT_MARKER,
+            &format!("{COMMENT_MARKER} <!-- {}; on {on}{names} -->", pr.head_sha),
+            1,
+        )
     }
 
     /// Publish an attempt that stays open. If a gate failed that its author
@@ -2645,6 +2669,10 @@ mod tests {
         /// run a pass set it. The gate comment of a pass is written, and so
         /// stamped by the forge, `COMMENT_DELAY` later.
         clock: Option<DateTime<Utc>>,
+        /// The gate comment on each pull request as it stands, with the
+        /// forge's time for it. As on GitHub, writing the same text again
+        /// changes nothing: the comment keeps the time it was last written.
+        gate_comments: BTreeMap<u64, (String, DateTime<Utc>)>,
     }
 
     /// How long after the start of a pass the mock forge stamps the gate
@@ -2733,8 +2761,15 @@ mod tests {
             self.status_text.insert(sha.into(), text.into());
             Ok(())
         }
-        fn upsert_comment(&mut self, _: u64, _: &str) -> Result<DateTime<Utc>> {
-            Ok(self.clock.unwrap_or(t(0)) + Duration::seconds(COMMENT_DELAY))
+        fn upsert_comment(&mut self, pr: u64, body: &str) -> Result<DateTime<Utc>> {
+            if let Some((was, at)) = self.gate_comments.get(&pr) {
+                if was.trim() == body.trim() {
+                    return Ok(*at);
+                }
+            }
+            let at = self.clock.unwrap_or(t(0)) + Duration::seconds(COMMENT_DELAY);
+            self.gate_comments.insert(pr, (body.to_string(), at));
+            Ok(at)
         }
         fn set_label(&mut self, issue: u64, label: &str, present: bool) -> Result<()> {
             self.labels.push((issue, label.into(), present));
@@ -4301,6 +4336,225 @@ mod tests {
         assert!(m.merged.is_empty(), "not in the pass that makes the record");
         pass(&mut m, &mut ledger, &[], t(0));
         assert_eq!(m.merged, [1]);
+    }
+
+    /// Two more commits, for pushes in the tests below.
+    const C2: &str = "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2";
+    const REVISED: &str = "1ee15ed111111111111111111111111111111111";
+
+    /// When the mock forge stamps the gate comment of a pass started at `at`.
+    fn stated(at: DateTime<Utc>) -> DateTime<Utc> {
+        at + Duration::seconds(COMMENT_DELAY)
+    }
+
+    #[test]
+    fn a_new_commit_does_not_inherit_the_time_of_the_previous_commits_comment() {
+        // The first commit is open with a leader's request for changes and is
+        // still being verified; the bot's comment for it is written.
+        let mut m = base();
+        m.prs.push(pr(1, "alice"));
+        m.active.insert(1);
+        m.pr_comments.insert(1, vec![CommentInfo { created_at: t(-5), ..says(1, "lead", "/request-changes too long", 0) }]);
+        let mut ledger = Ledger::default();
+        pass(&mut m, &mut ledger, &[], t(0));
+        let first = ledger.judged[&key(1, &head(1))].at.unwrap();
+        assert_eq!(first, stated(t(0)));
+
+        // A second commit is pushed, and approved before any pass has seen
+        // it. The pass that first judges it has the same gates to show (the
+        // request for changes hides everything else about the review).
+        m.prs[0].head_sha = C2.into();
+        m.reviews.insert(1, vec![approve_at("bob", C2, t(0) + Duration::minutes(10))]);
+        pass(&mut m, &mut ledger, &[], t(1));
+        assert_eq!(
+            ledger.judged[&key(1, C2)].at,
+            Some(stated(t(1))),
+            "the comment names the commit, so it was written again for this one"
+        );
+        assert!(m.gate_comments[&1].0.starts_with(&format!("{COMMENT_MARKER} <!-- {C2}; on main -->\n")));
+
+        // The request is withdrawn and the build passes. The approval is
+        // from before the comment for this commit: it does not count.
+        m.pr_comments.clear();
+        m.active.clear();
+        m.extra_results.push(at_head(stacked(1, "m0", "tree:m0", &[], 900), C2));
+        let out = pass(&mut m, &mut ledger, &[], t(2));
+        assert!(m.merged.is_empty(), "an approval given before the gatekeeper had judged the commit");
+        assert!(gate_of(&out.open[0], "review").detail.as_deref().unwrap().contains("bob were given before the bot's comment"));
+        assert!(m.posted.iter().any(|(_, b)| b.starts_with("@bob your approval")));
+        // Given again after it, it counts.
+        m.reviews.insert(1, vec![approve_at("bob", C2, stated(t(1)) + Duration::minutes(1))]);
+        pass(&mut m, &mut ledger, &[], t(3));
+        assert_eq!(m.merged, [1]);
+    }
+
+    #[test]
+    fn the_first_line_of_the_comment_names_the_commit_and_what_it_is_judged_on() {
+        let mut m = pair();
+        let mut ledger = Ledger::default();
+        pass(&mut m, &mut ledger, &[], t(0));
+        let first_line = |m: &Mock, n: u64| m.gate_comments[&n].0.lines().next().unwrap().to_string();
+        assert_eq!(first_line(&m, 1), format!("{COMMENT_MARKER} <!-- {}; on main -->", head(1)));
+        assert_eq!(first_line(&m, 2), format!("{COMMENT_MARKER} <!-- {}; on 1@{}; depends #1 -->", head(2), head(1)));
+        // The text a reader sees starts as before.
+        assert!(m.gate_comments[&1].0.lines().nth(1).unwrap().starts_with("### Hillclimb gate"));
+        // The same commit on the same basis: the same text, the same time.
+        let at = m.gate_comments[&2].1;
+        pass(&mut m, &mut ledger, &[], t(1));
+        assert_eq!(m.gate_comments[&2].1, at);
+        // What it is built on is pushed to: another basis, written again.
+        m.prs[0].head_sha = REVISED.into();
+        m.active.insert(1);
+        pass(&mut m, &mut ledger, &[], t(2));
+        assert_eq!(first_line(&m, 2), format!("{COMMENT_MARKER} <!-- {}; on 1@{REVISED}; depends #1 -->", head(2)));
+        assert_eq!(ledger.judged[&key(2, &head(2))].at, Some(stated(t(2))));
+    }
+
+    #[test]
+    fn a_dependent_pair_from_first_sight_to_both_merged_in_real_passes() {
+        let mut m = pair();
+        let mut ledger = Ledger::default();
+        let out = pass(&mut m, &mut ledger, &[], t(0));
+        for n in [1, 2] {
+            assert_eq!(open(&out, n).status, AttemptStatus::AwaitingReview);
+            assert_eq!(ledger.judged[&key(n, &head(n))].at, Some(stated(t(0))));
+        }
+        assert_eq!(ledger.judged[&key(2, &head(2))].on, [key(1, &head(1))]);
+        assert!(render_comment(&cfg(), open(&out, 2)).contains(&format!("judged on top of #1 at `{}`", head(1))));
+        // Both are approved after the bot's comments; the next pass merges
+        // #1 and, from its result on top of #1, #2.
+        for n in [1, 2] {
+            m.reviews.insert(n, vec![approve_at("bob", &head(n), stated(t(0)) + Duration::minutes(5))]);
+        }
+        let out = pass(&mut m, &mut ledger, &[], t(1));
+        assert_eq!(m.merged, [1, 2]);
+        assert!(m.dispatched.is_empty() && m.posted.is_empty());
+        assert!(ledger.judged.is_empty(), "the records go with the merges");
+        assert_eq!(out.decided.len(), 2);
+    }
+
+    #[test]
+    fn a_push_to_the_dependency_in_real_passes() {
+        // The dependent's branch does not have the new commit: it needs a fix,
+        // and the commit that fixes it needs an approval given after the
+        // bot's comment on that commit.
+        let mut m = pair();
+        let mut ledger = Ledger::default();
+        pass(&mut m, &mut ledger, &[], t(0));
+        m.reviews.insert(2, vec![approve_at("bob", &head(2), stated(t(0)) + Duration::minutes(5))]);
+        let out = pass(&mut m, &mut ledger, &[], t(1));
+        assert_eq!(gate_of(open(&out, 2), "review").status, GateStatus::Pass);
+        assert!(m.merged.is_empty());
+
+        m.prs[0].head_sha = REVISED.into();
+        m.lacks.insert((head(2), REVISED.into()));
+        m.extra_results.push(at_head(stacked(1, "m0", "tree:m0", &[], 950), REVISED));
+        let out = pass(&mut m, &mut ledger, &[], t(2));
+        let second = open(&out, 2);
+        assert_eq!(second.status, AttemptStatus::NeedsFix);
+        assert!(gate_of(second, "format").detail.as_deref().unwrap().contains("this branch does not contain that commit"));
+
+        // Its author merges #1's branch in: a new commit. A reviewer approves
+        // it at once, before any pass has seen it; #1 is approved too.
+        m.prs[1].head_sha = C2.into();
+        let hasty = stated(t(2)) + Duration::minutes(10);
+        m.reviews.insert(2, vec![approve_at("bob", C2, hasty)]);
+        m.reviews.insert(1, vec![approve_at("bob", REVISED, hasty)]);
+        let tree = format!("tree:{}", landed_at(1, REVISED));
+        let mut on_revised = at_head(stacked(2, "m0", &tree, &[], 800), C2);
+        on_revised.stack = vec![key(1, REVISED)];
+        on_revised.base_metrics.tokens = 950;
+        m.extra_results.push(on_revised);
+        let out = pass(&mut m, &mut ledger, &[], t(3));
+        assert_eq!(m.merged, [1], "#1's approval came after the comment on its new commit; #2's new commit is judged only now");
+        let log = out.decided.clone();
+        m.prs.remove(0);
+        let out = pass(&mut m, &mut ledger, &log, t(4));
+        assert_eq!(m.merged, [1], "the hasty approval is from before the comment on that commit");
+        assert!(gate_of(open(&out, 2), "review").detail.as_deref().unwrap().contains("bob were given before the bot's comment"));
+        m.reviews.insert(2, vec![approve_at("bob", C2, stated(t(3)) + Duration::minutes(5))]);
+        pass(&mut m, &mut ledger, &log, t(5));
+        assert_eq!(m.merged, [1, 2]);
+
+        // The dependent's branch already has the new commit: nothing to fix,
+        // but the approval was given for the difference from the old one
+        // and starts over.
+        let mut m = pair();
+        let mut ledger = Ledger::default();
+        pass(&mut m, &mut ledger, &[], t(0));
+        m.reviews.insert(2, vec![approve_at("bob", &head(2), stated(t(0)) + Duration::minutes(5))]);
+        pass(&mut m, &mut ledger, &[], t(1));
+        m.prs[0].head_sha = REVISED.into();
+        m.extra_results.push(at_head(stacked(1, "m0", "tree:m0", &[], 950), REVISED));
+        let mut on_revised = stacked(2, "m0", &tree, &[], 800);
+        on_revised.stack = vec![key(1, REVISED)];
+        on_revised.base_metrics.tokens = 950;
+        m.extra_results.push(on_revised);
+        m.reviews.insert(1, vec![approve_at("bob", REVISED, stated(t(2)) + Duration::minutes(5))]);
+        for at in [t(2), t(3)] {
+            let out = pass(&mut m, &mut ledger, &[], at);
+            let second = out.open.iter().find(|a| a.pr == 2).unwrap();
+            assert_eq!(gate_of(second, "format").status, GateStatus::Pass);
+            assert_eq!(gate_of(second, "review").status, GateStatus::Pending, "approved for the difference from the other commit");
+            assert!(m.merged.iter().all(|n| *n != 2));
+        }
+        assert_eq!(m.merged, [1]);
+        assert!(m.posted.iter().any(|(n, b)| *n == 2 && b.starts_with("@bob your approval")));
+    }
+
+    #[test]
+    fn a_push_after_an_approval_in_real_passes() {
+        // An ordinary change is judged and approved. Its author pushes
+        // again, and the new commit is approved before a pass has seen it.
+        let mut m = base();
+        m.prs.push(pr(1, "alice"));
+        m.active.insert(1);
+        let mut ledger = Ledger::default();
+        pass(&mut m, &mut ledger, &[], t(0));
+        m.reviews.insert(1, vec![approve_at("bob", &head(1), stated(t(0)) + Duration::minutes(5))]);
+        m.prs[0].head_sha = C2.into();
+        m.reviews.get_mut(&1).unwrap().push(approve_at("bob", C2, stated(t(0)) + Duration::minutes(6)));
+        m.extra_results.push(at_head(stacked(1, "m0", "tree:m0", &[], 900), C2));
+        m.active.clear();
+        let out = pass(&mut m, &mut ledger, &[], t(1));
+        assert!(m.merged.is_empty(), "the pass that first judges the new commit counts no approval of it");
+        assert_eq!(out.open[0].status, AttemptStatus::AwaitingReview);
+        let out = pass(&mut m, &mut ledger, &[], t(2));
+        assert!(m.merged.is_empty(), "nor does a later pass: the approval is from before the comment on that commit");
+        assert!(gate_of(&out.open[0], "review").detail.as_deref().unwrap().contains("bob were given before the bot's comment"));
+        assert_eq!(m.posted.len(), 1);
+        m.reviews.get_mut(&1).unwrap().push(approve_at("bob", C2, stated(t(1)) + Duration::minutes(5)));
+        pass(&mut m, &mut ledger, &[], t(3));
+        assert_eq!(m.merged, [1]);
+    }
+
+    #[test]
+    fn a_ledger_from_before_these_records_is_read_and_the_first_pass_goes_through() {
+        // As written by a version that pinned `Depends` by number only.
+        let old = r#"{"claims":{"7":{"login":"alice","at":"2026-01-09T00:00:00Z"}},"comments_seen_until":"2026-01-09T00:00:00Z","dispatched":{},"lines":{},"line_bases":{},"alerts":[],"format_notified":[],"depends":{"2@abc":[1]}}"#;
+        let mut ledger: Ledger = serde_json::from_str(old).expect("an old ledger is still read");
+        assert!(ledger.judged.is_empty() && ledger.told.is_empty());
+        assert_eq!(ledger.claims[&7].login, "alice");
+        // The first pass with it: every open commit is judged for the first
+        // time, approvals from before do not count, and nothing fails.
+        let mut m = pair();
+        for n in [1, 2] {
+            m.reviews.insert(n, vec![approve_at("bob", &head(n), t(-3))]);
+        }
+        let out = pass(&mut m, &mut ledger, &[], t(0));
+        assert!(m.merged.is_empty());
+        assert_eq!(out.open.len(), 2);
+        assert_eq!(ledger.judged.len(), 2);
+        assert_eq!(m.posted.len(), 2, "each reviewer is told once to approve again");
+        // What is written now is read back.
+        let again: Ledger = serde_json::from_str(&serde_json::to_string(&ledger).unwrap()).unwrap();
+        assert_eq!(again.judged, ledger.judged);
+        // A record as the version before this one wrote it (a time, no
+        // `names`, no `has_merged`) is read as well.
+        let earlier = r#"{"judged":{"1@x":{"at":"2026-01-10T00:00:00Z","on":["3@y"],"contains":true}}}"#;
+        let ledger: Ledger = serde_json::from_str(earlier).unwrap();
+        assert_eq!(ledger.judged["1@x"].at, Some(t(0)));
+        assert_eq!((ledger.judged["1@x"].names, ledger.judged["1@x"].has_merged), (None, None));
     }
 
     #[test]

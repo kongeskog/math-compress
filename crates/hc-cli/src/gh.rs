@@ -490,9 +490,7 @@ impl Forge for GhForge {
                 .context("the forge gave no time for the gate comment")
         };
         let existing = self.issue_comments(pr)?;
-        let mine = existing
-            .iter()
-            .find(|c| s(c, "body").starts_with(COMMENT_MARKER) && s(&c["user"], "type") == "Bot");
+        let mine = own_gate_comment(&existing, &bot_login());
         if self.dry_run {
             return Ok(mine.and_then(|c| stamp(c).ok()).unwrap_or_else(Utc::now));
         }
@@ -636,6 +634,52 @@ impl Forge for GhForge {
     fn comment(&mut self, issue: u64, body: &str) -> Result<()> {
         self.write("POST", &format!("issues/{issue}/comments"), &[("body", body)])?;
         Ok(())
+    }
+}
+
+/// The login under which the gatekeeper comments: that of the Actions token
+/// it runs with. `HC_BOT_LOGIN` names another one, for a gatekeeper run with
+/// another identity.
+fn bot_login() -> String {
+    std::env::var("HC_BOT_LOGIN").ok().filter(|l| !l.is_empty()).unwrap_or_else(|| "github-actions[bot]".to_string())
+}
+
+/// The gatekeeper's own comment among the comments of a pull request: the
+/// first that starts with the marker and was posted under the gatekeeper's
+/// login. A comment with the marker from anyone else, another bot included,
+/// is neither read (its time would be taken for the gatekeeper's statement)
+/// nor overwritten.
+fn own_gate_comment<'a>(comments: &'a [Value], login: &str) -> Option<&'a Value> {
+    comments.iter().find(|c| {
+        s(c, "body").starts_with(COMMENT_MARKER)
+            && s(&c["user"], "type") == "Bot"
+            && s(&c["user"], "login").eq_ignore_ascii_case(login)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_gate_comment_is_the_gatekeepers_own() {
+        let comment = |login: &str, kind: &str, body: &str| json!({"id": 1, "body": body, "user": {"login": login, "type": kind}});
+        let gate = format!("{COMMENT_MARKER} <!-- abc; on main -->\n### Hillclimb gate");
+        // Another bot, or a person, posted a comment that starts with the
+        // marker before the gatekeeper's: it is neither read nor overwritten.
+        let comments = vec![
+            comment("mallory", "User", &gate),
+            comment("other-app[bot]", "Bot", &gate),
+            comment("github-actions[bot]", "Bot", "something else"),
+            comment("github-actions[bot]", "Bot", &gate),
+        ];
+        let mine = own_gate_comment(&comments, "github-actions[bot]").unwrap();
+        assert_eq!(s(&mine["user"], "login"), "github-actions[bot]");
+        assert!(s(mine, "body").starts_with(COMMENT_MARKER));
+        assert!(own_gate_comment(&comments[..3], "github-actions[bot]").is_none());
+        // The marker is still found with the commit and basis after it.
+        assert!(own_gate_comment(&comments, "other-app[bot]").is_some());
     }
 }
 
