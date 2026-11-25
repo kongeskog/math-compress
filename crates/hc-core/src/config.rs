@@ -38,11 +38,37 @@ pub struct Conduct {
     /// than on the base branch. 0 states no limit.
     pub max_slowdown_pct: u32,
     pub search_tactics: SearchTactics,
+    pub local_automation: LocalAutomation,
+}
+
+/// Whether a file may tune automation for its own proofs to save tokens:
+/// `attribute [local simp]` on its lemmas, and hypotheses with a default
+/// proof (`(h : p := by tac)`). Off unless an arena turns it on: a reader
+/// can then no longer see at a call which facts a proof step used.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LocalAutomation {
+    pub enabled: bool,
+    /// At most this many `attribute [local simp]` lines in one file.
+    pub max_local_simp_per_file: u32,
+    /// A lemma is made a local simp lemma only if it is passed to `simp`
+    /// at least this many times in the file.
+    pub min_uses: u32,
+}
+
+impl Default for LocalAutomation {
+    fn default() -> Self {
+        LocalAutomation { enabled: false, max_local_simp_per_file: 10, min_uses: 3 }
+    }
 }
 
 impl Default for Conduct {
     fn default() -> Self {
-        Conduct { max_slowdown_pct: 10, search_tactics: SearchTactics::default() }
+        Conduct {
+            max_slowdown_pct: 10,
+            search_tactics: SearchTactics::default(),
+            local_automation: LocalAutomation::default(),
+        }
     }
 }
 
@@ -111,6 +137,18 @@ impl Conduct {
         )
     }
 
+    /// The rule on automation tuned per file, as a sentence for contributors.
+    pub fn local_rule(&self) -> String {
+        let la = &self.local_automation;
+        if !la.enabled {
+            return "Do not add `attribute [local simp]` (or other attributes that change what automation does) or hypotheses with a default proof to save tokens.".to_string();
+        }
+        format!(
+            "A file may tune automation for its own proofs under these conditions: a lemma becomes `attribute [local simp]` only if it is passed to `simp` at least {} times in that file, with at most {} such lines in a file, each next to the lemma or in one block at the top of its section with a comment saying what the set is for; a hypothesis gets a default proof (`(h : p := by tac)`) only if most callers discharge it by that same tactic; never a global attribute, never a change to an instance priority or to the library's simp set, and the file may not compile slower than the limit above.",
+            la.min_uses, la.max_local_simp_per_file
+        )
+    }
+
     /// Both rules as extra bullets for the reviewer's list of reasons to
     /// request changes. Starts with a newline when not empty.
     pub fn reviewer_bullets(&self) -> String {
@@ -137,6 +175,15 @@ impl Conduct {
                     self.tactic_list()
                 ));
             }
+        }
+        let la = &self.local_automation;
+        if la.enabled {
+            out.push_str(&format!(
+                "\n- Automation tuned per file outside its conditions: a local simp lemma used fewer than {} times, more than {} such lines in a file, a global attribute, a changed instance priority, a lemma erased from the library's simp set, or a default proof that most callers would not have written.",
+                la.min_uses, la.max_local_simp_per_file
+            ));
+        } else {
+            out.push_str("\n- New `attribute [local simp]` lines or hypotheses with a default proof, added to save tokens.");
         }
         out
     }
@@ -507,7 +554,11 @@ mod tests {
         c.search_tactics.tactics.clear();
         assert!(c.time_rule("main").is_empty());
         assert!(c.search_rule().is_empty());
-        assert!(c.reviewer_bullets().is_empty());
+        assert!(c.reviewer_bullets().contains("default proof"));
+        assert!(c.local_rule().starts_with("Do not add"));
+        c.local_automation.enabled = true;
+        assert!(c.local_rule().contains("at least 3 times"));
+        assert!(c.reviewer_bullets().contains("outside its conditions"));
         let parsed: Conduct = toml::from_str("[search_tactics]\nenabled = true\nmin_saving = 40").unwrap();
         assert!(parsed.search_tactics.enabled);
         assert_eq!(parsed.search_tactics.min_saving, 40);

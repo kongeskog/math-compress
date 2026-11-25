@@ -90,6 +90,13 @@ max_per_file = 10
 min_saving = 25
 max_slowdown_pct = 20
 
+# Automation tuned per file: local simp lemmas and hypotheses with a default
+# proof. Off by default in the library; this arena tries it.
+[conduct.local_automation]
+enabled = true
+max_local_simp_per_file = 10
+min_uses = 3
+
 [ideas]
 label = "idea"
 lease_hours = 3

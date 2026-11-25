@@ -95,7 +95,7 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
             },
         ),
         ("conduct_contributor", {
-            let rules: Vec<String> = [cfg.conduct.time_rule(&p.branch), cfg.conduct.search_rule()]
+            let rules: Vec<String> = [cfg.conduct.time_rule(&p.branch), cfg.conduct.search_rule(), cfg.conduct.local_rule()]
                 .into_iter()
                 .filter(|r| !r.is_empty())
                 .collect();
