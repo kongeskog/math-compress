@@ -144,7 +144,7 @@ An arena calls the reusable workflows at `@main`, so it gets a new gatekeeper an
 - In its `hillclimb-verify.yml`, the dispatch input `min_delta` and the line `min-delta: ${{ inputs.min_delta || '' }}` passed to the reusable workflow, as in `arena/.github/workflows/hillclimb-verify.yml`. Until then everything else works; a waiver is answered but its verification cannot be started, which the gatekeeper's log says.
 - Optionally `trial_above` under `[ideas]` in `hillclimb.toml` (1000 if absent) and the new pull request template.
 
-No new permission is needed, and the label `hillclimb:needs-fix` is created the first time it is used. Results written before the update keep the rules they were made under: they carry the count checks inside the banned-constructs gate, and a stacked one is merged from as before.
+No new permission is needed, and the label `hillclimb:needs-fix` is created the first time it is used. Results written before the update keep the rules they were made under: they carry the count checks inside the banned-constructs gate, and a stacked one is merged from as before, except for a commit that was judged on top of another change (`Depends`), which needs a result that records the tree as it will land.
 
 ## Develop
 

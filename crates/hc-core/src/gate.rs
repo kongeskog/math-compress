@@ -738,9 +738,14 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 Some(t) => *t == main_tree,
                 None => r.base_sha == main,
             };
+            // A commit that was judged on top of another change has commits of
+            // that change in its branch, so a stacked result for it must say
+            // which tree lands; one from before that was recorded does not count.
+            let lands = |r: &VerifyResult| {
+                lands_as_verified(r) && (declared.is_empty() || r.stack.is_empty() || r.landing_tree.is_some())
+            };
             // Held changes have no result to merge from, whatever its tree.
-            let fresh_result =
-                if held { None } else { results.iter().find(|r| is_fresh(r) && lands_as_verified(r)) };
+            let fresh_result = if held { None } else { results.iter().find(|r| is_fresh(r) && lands(r)) };
             let fresh = fresh_result.is_some();
             // Verified on exactly today's main, but this branch would land as another tree.
             let diverged = !held && !fresh && results.iter().any(|r| is_fresh(r));
@@ -3485,6 +3490,20 @@ mod tests {
         m.extra_results.push(alone);
         run(&mut m, &mut ledger, &out.decided);
         assert_eq!(m.merged, [1, 2]);
+
+        // A stacked result that does not say which tree lands (one written
+        // before that was recorded) is not merged from either, for a change
+        // that was judged on top of another.
+        let mut m = pair();
+        m.extra_results.retain(|r| r.pr != 2);
+        m.extra_results.push(on_tree(2, "tree:merge1", &["1@head1abcdef"], true));
+        let mut ledger = Ledger::default();
+        run(&mut m, &mut ledger, &[]);
+        for n in [1, 2] {
+            m.reviews.insert(n, vec![approve("bob", &head(n))]);
+        }
+        run(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [1]);
 
         // The same holds for any stacked result, with or without a `Depends` line.
         let mut m = two_stale();
