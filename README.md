@@ -123,6 +123,10 @@ hc eval --reservations                      # also list files reserved by claime
 hc leads          # declarations that are exact copies of each other
 hc precheck       # before a pull request: hc eval, deleted names still mentioned, added lines, open changes to the same files
 hc time --base ../main-checkout   # compile time of each changed file there and here, alternating runs, as a table for the description
+hc analyze reach  # in a built checkout: declarations the final theorems do not reach, with tokens (candidates: delete, build, compare)
+hc analyze unused # structure fields, conjuncts of statements and hypotheses, and binders that nothing reads
+hc analyze twins  # theorems and definitions with equal or nearly equal elaborated statements, with the tokens a merge could save
+hc analyze tails Nc/A.lean   # steps after which one closing tactic proves the rest of the block (--all, --tactic, --out, --resume)
 ```
 
 ## Start a new arena

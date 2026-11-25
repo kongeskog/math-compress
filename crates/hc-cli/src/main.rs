@@ -1,4 +1,5 @@
 mod analyze;
+mod analyze_more;
 mod gh;
 mod landing;
 mod ops;
@@ -281,6 +282,55 @@ enum AnalyzeTool {
     Reach(AnalyzeArgs),
     /// Unused structure fields, conjuncts of statements and hypotheses, and binders.
     Unused(AnalyzeArgs),
+    /// Reached theorems and definitions with equal or nearly equal statements (or bodies).
+    Twins(TwinsArgs),
+    /// Steps of tactic blocks after which one closing tactic proves all remaining goals.
+    /// Hits are upper bounds: about half of such tokens were realized in the first arena, some
+    /// hits fail once the text is replaced, and compile time is not measured (use `hc time`).
+    Tails(TailsArgs),
+}
+
+#[derive(clap::Args)]
+struct TwinsArgs {
+    #[command(flatten)]
+    common: AnalyzeArgs,
+    /// Most distinct pairs of constants or literals in which near twins may differ.
+    #[arg(long, default_value_t = 2)]
+    max_diff: usize,
+    /// Skip statements smaller than this many expression nodes.
+    #[arg(long, default_value_t = 15)]
+    min_size: usize,
+    /// Compare near twins across modules and namespaces too.
+    #[arg(long)]
+    everywhere: bool,
+}
+
+#[derive(clap::Args)]
+struct TailsArgs {
+    /// Files to analyze (relative to the project directory, the repository or here).
+    files: Vec<String>,
+    /// Analyze every counted file.
+    #[arg(long)]
+    all: bool,
+    #[arg(long)]
+    root: Option<PathBuf>,
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// Candidate tactic (repeatable); replaces the default list.
+    #[arg(long = "tactic")]
+    tactics: Vec<String>,
+    /// Heartbeats per try, in thousands (as `maxHeartbeats`).
+    #[arg(long, default_value_t = 20000)]
+    heartbeats: u64,
+    /// Minimum tokens saved per place. Defaults to `conduct.search_tactics.min_saving`.
+    #[arg(long)]
+    min_saving: Option<u64>,
+    /// Append the records of each file here as it finishes.
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// Skip files already recorded in `--out`.
+    #[arg(long, requires = "out")]
+    resume: bool,
 }
 
 #[derive(clap::Args)]
@@ -379,6 +429,33 @@ fn main() -> Result<()> {
             let (tool, a) = match tool {
                 AnalyzeTool::Reach(a) => (analyze::Tool::Reach, a),
                 AnalyzeTool::Unused(a) => (analyze::Tool::Unused, a),
+                AnalyzeTool::Twins(t) => {
+                    let a = t.common;
+                    return analyze_more::twins(analyze_more::TwinsOptions {
+                        root: a.root,
+                        config: a.config,
+                        imports: a.imports,
+                        theorems: a.theorems,
+                        out: a.out,
+                        top: a.top,
+                        max_diff: t.max_diff,
+                        min_size: t.min_size,
+                        everywhere: t.everywhere,
+                    });
+                }
+                AnalyzeTool::Tails(t) => {
+                    return analyze_more::tails(analyze_more::TailsOptions {
+                        root: t.root,
+                        config: t.config,
+                        files: t.files,
+                        all: t.all,
+                        tactics: t.tactics,
+                        heartbeats: t.heartbeats,
+                        min_saving: t.min_saving,
+                        out: t.out,
+                        resume: t.resume,
+                    });
+                }
             };
             let o = analyze::Options {
                 root: a.root,

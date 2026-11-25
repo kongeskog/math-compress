@@ -252,7 +252,7 @@ pub fn analyze(tool: Tool, o: Options) -> Result<()> {
     }
 }
 
-fn print_summary(stdout: &str) {
+pub fn print_summary(stdout: &str) {
     for line in stdout.lines() {
         if let Some(s) = line.strip_prefix("# ") {
             println!("{s}");
