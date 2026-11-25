@@ -41,6 +41,8 @@ export type Attempt = {
   scope?: string | null;
   /** open pull requests this change is built on, the first to merge first */
   depends?: number[];
+  /** `pr@sha` of those changes as this commit is judged on top of them */
+  judged_on?: string[];
   /** `pr@sha` of the changes its metrics were measured on top of; absent for main alone */
   measured_on?: string[];
   /** notes that fail no gate, such as files reserved by a claimed idea */

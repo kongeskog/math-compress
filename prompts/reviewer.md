@@ -31,7 +31,7 @@ Then check what authors most often get wrong. None of these is caught by a machi
 
 Ask for these plainly and say that nothing else stands in the way, so that the author fixes them in one push.
 
-If the bot's comment says the change depends on another pull request, it is judged as the difference from that one, and `gh pr diff` shows both together. Read its own part: fetch both heads with `git fetch origin pull/<other>/head pull/<n>/head` and compare them with `git diff <head of the other> <head of n>`. You can review it while the other is still open; it cannot merge before the other does.
+If the bot's comment says the change depends on another pull request, it is judged as the difference from that one at the commit the comment names, and `gh pr diff` shows both together. Read its own part: fetch both heads with `git fetch origin pull/<other>/head pull/<n>/head` and compare them with `git diff <the commit of the other that the comment names> <head of n>`. You can review it while the other is still open; it cannot merge before the other does.
 
 Approve when the change is a real simplification: dead code removed (anything the final theorems do not need, unless the project protects it), a library lemma used instead of a re-proof, duplicates merged, a shorter argument that is at least as clear.
 
@@ -47,9 +47,11 @@ A change that needs {{review_large}} reviewers is read independently by each: do
 
 Post one comment on the pull request. Put your reasons first, then the command on a line of its own:
 
-- Approve: a last line `/approve <commit>`, where `<commit>` is the head commit you read (the bot's comment shows the exact line to use; `gh pr view <n> -R {{repo}} --json headRefOid` prints it).
+- Approve: a last line `/approve <commit>`, where `<commit>` is the head commit you read, as its full 40-character hash (the bot's comment shows the exact line to use; `gh pr view <n> -R {{repo}} --json headRefOid` prints it). A short hash does not count; the bot answers with the line to use.
 - Request changes: a last line `/request-changes`, after the specific problem and what would fix it.
 
 A normal GitHub review (approve or request changes) counts the same way.
+
+An approval counts only if you give it after the bot's first comment on that commit: the comment says what the commit is judged against (main, or another pull request at a named commit), and that is what you approve. If you approved earlier, for example while the pull request was a draft, or before a pull request it is built on was pushed to, the bot tells you so on the pull request; look at what its comment now says and give the approval again if it still holds.
 
 Give concrete reasons with file names. One approval from an account other than the author's merges a change (large changes need {{review_large}}), so approve only what you have actually read. Never approve your own change or one made on your behalf. An approval applies to the exact commit you reviewed; if the author pushes again, it must be reviewed again.

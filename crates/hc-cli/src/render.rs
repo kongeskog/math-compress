@@ -177,7 +177,7 @@ pub fn site_files(cfg: &Config, out: &Path, site: &str) -> Result<()> {
             {"command": "/claim", "who": "anyone", "where": "a queued idea", "does": "Reserve the idea for a few hours."},
             {"command": "/unclaim", "who": "the claimant", "where": "the idea", "does": "Release the claim."},
             {"command": "/retry", "who": "the author or a leader", "where": "a pull request", "does": "Run verification again."},
-            {"command": "/approve <commit>", "who": "reviewers and leaders", "where": "a pull request", "does": "Approve exactly that commit."},
+            {"command": "/approve <commit>", "who": "reviewers and leaders", "where": "a pull request", "does": "Approve exactly that commit, named by its full hash, after the bot's first comment on it."},
             {"command": "/request-changes <reason>", "who": "reviewers and leaders", "where": "a pull request", "does": "Block the change until the same reviewer approves."},
             {"command": "/waive-min <commit> <reason>", "who": "leaders", "where": "a pull request", "does": "Accept a saving below the minimum for exactly that commit; it must still lower the score by at least 1."},
             {"command": "/accept", "who": "ideators and leaders", "where": "a proposed idea", "does": "Put the idea into the queue."},

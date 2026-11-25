@@ -25,7 +25,7 @@ Machines decide whether a change is correct, and a reviewer who did not write it
 
 ## Moving a change through review
 
-- Start a reviewer for every new pull request as soon as it is open; do not wait for the build. A change over {{large_change_files}} files gets {{review_large}} reviewers who work independently; give each a different half to read closely.
+- Start a reviewer for every new pull request as soon as it is open; do not wait for the build. The reviewer may read at once, but posts its approval only after the bot's first comment on that commit is there: an earlier approval does not count and has to be given again. A change over {{large_change_files}} files gets {{review_large}} reviewers who work independently; give each a different half to read closely.
 - Tell the reviewer what the change claims and where the author was unsure. Do not tell the reviewer what to conclude.
 - When a review requests changes, send the review to the author, not to a new worker. When the author has pushed, ask the same reviewer to look again at what changed since the commit it read. A second look takes a fraction of a first review.
 - Requests for changes are mostly about comments, names and layout. Have authors run `hc precheck` before opening, which catches most of them.
