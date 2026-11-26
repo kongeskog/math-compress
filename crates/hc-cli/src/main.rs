@@ -952,6 +952,42 @@ mod tests {
         .is_ok());
     }
 
+    #[test]
+    fn a_data_branch_tip_the_gatekeeper_did_not_write_is_seen() {
+        let bot = "github-actions[bot]";
+        assert!(data_tip_is_ours(bot, bot, bot));
+        // A pull request merged into the data branch through the forge: the
+        // author is the pull request's, the committer the forge.
+        assert!(!data_tip_is_ours("mallory", "GitHub", bot));
+        assert!(!data_tip_is_ours(bot, "GitHub", bot));
+        assert!(!data_tip_is_ours("mallory", bot, bot));
+
+        let dir = std::env::temp_dir().join(format!("hc-data-tip-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // No checkout, or one without a commit: nothing to compare.
+        assert_eq!(foreign_data_tip(&dir, bot), None);
+        let git = |args: &[&str]| {
+            let ok = Command::new("git").arg("-C").arg(&dir).args(args).output().unwrap().status.success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "--quiet"]);
+        assert_eq!(foreign_data_tip(&dir, bot), None);
+        let commit = |name: &str, file: &str| {
+            std::fs::write(dir.join(file), name).unwrap();
+            git(&["add", "-A"]);
+            git(&["-c", &format!("user.name={name}"), "-c", "user.email=x@example.invalid", "commit", "--quiet", "-m", "x"]);
+        };
+        commit(bot, "state.json");
+        assert_eq!(foreign_data_tip(&dir, bot), None);
+        commit("mallory", "roles.json");
+        let why = foreign_data_tip(&dir, bot).unwrap();
+        assert!(why.contains("written by `mallory`") && why.contains("not by the gatekeeper"), "{why}");
+        // Under another identity the gatekeeper names itself.
+        assert_eq!(foreign_data_tip(&dir, "mallory"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The result an evaluation writes records the minimum it was judged
     /// with and the tree as it will land, and has the gate for counts.
     #[test]
@@ -998,10 +1034,74 @@ fn read_jsonl<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
         .collect()
 }
 
+/// The author and committer of the commit a data checkout is at, or `None`
+/// if it is not a git checkout or has no commit yet.
+fn data_tip(data: &Path) -> Option<(String, String, String)> {
+    if !data.join(".git").exists() {
+        return None;
+    }
+    let out = Command::new("git").arg("-C").arg(data).args(["log", "-1", "--format=%H%x00%an%x00%cn"]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim_end().to_string();
+    let mut parts = text.split('\0').map(str::to_string);
+    Some((parts.next()?, parts.next()?, parts.next()?))
+}
+
+/// Whether the commit at the tip of the data branch is one the gatekeeper's
+/// own publishing step wrote: authored and committed under the gatekeeper's
+/// identity. A commit that reached the branch another way (a pull request
+/// pointed at the data branch and merged, a push by hand) has another
+/// author or another committer: a merge made through the forge is committed
+/// by the forge, whoever asked for it.
+fn data_tip_is_ours(author: &str, committer: &str, bot: &str) -> bool {
+    author.eq_ignore_ascii_case(bot) && committer.eq_ignore_ascii_case(bot)
+}
+
+/// What is wrong with the tip of the data branch, if it is not ours.
+fn foreign_data_tip(data: &Path, bot: &str) -> Option<String> {
+    let (sha, author, committer) = data_tip(data)?;
+    (!data_tip_is_ours(&author, &committer, bot)).then(|| {
+        format!(
+            "the data branch is at commit {sha}, written by `{author}` and committed by `{committer}`, not by the gatekeeper (`{bot}`)"
+        )
+    })
+}
+
 fn gate(root: &Path, data: &Path, dry_run: bool) -> Result<()> {
     let cfg = Config::load(&root.join("hillclimb.toml"))?;
     let now = Utc::now();
     std::fs::create_dir_all(data)?;
+    if cfg.review_unstated {
+        println!(
+            "Notice: hillclimb.toml has no [review] section, so approvals are required as before (required = {}, required_large = {}). To merge on the gates alone, set `[review] required = 0` and `required_large = 0`.",
+            cfg.review.required, cfg.review.required_large
+        );
+    }
+    // The data branch holds the roles, the ledger and the record of what was
+    // decided: everything the gatekeeper believes from one pass to the next.
+    // If its tip is a commit the gatekeeper did not write, nothing in it is
+    // believed: no pass is made, nothing merges and nothing is published on
+    // top of it, until a leader has put the branch back.
+    if let Some(why) = foreign_data_tip(data, &gh::bot_login()) {
+        let title = "Alert: the data branch holds a commit the gatekeeper did not write";
+        if !dry_run {
+            let mut forge = gh::GhForge::new(&cfg.project.repo, &cfg.project.branch, &cfg.build.workflow, dry_run);
+            let raised = hc_core::gate::Forge::issues(&mut forge)
+                .map(|all| all.iter().any(|i| i.open && i.title == title))
+                .unwrap_or(false);
+            if !raised {
+                let _ = hc_core::gate::Forge::create_issue(
+                    &mut forge,
+                    title,
+                    &format!("Before a pass, {why}. The gatekeeper keeps its roles, its ledger and its record on that branch, so it has stopped: no pass is made and nothing merges until the branch is put back. Leaders: look at that commit and at how it got there (a pull request pointed at the data branch, a push by hand), reset the branch to the last commit by `{}` (`git log --format='%H %an %cn'`), and close this issue. If the gatekeeper runs under another identity, set `HC_BOT_LOGIN`.", gh::bot_login()),
+                    hc_core::gate::LABEL_ALERT,
+                );
+            }
+        }
+        bail!("{why}; nothing was done");
+    }
     let state_path = data.join("state.json");
     let ledger_path = data.join("ledger.json");
     let attempts_path = data.join("attempts.jsonl");

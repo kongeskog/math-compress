@@ -1281,7 +1281,7 @@ noncomputable def outer := 2
             seed ^= seed << 17;
             seed
         };
-        let mut text = |next: &mut dyn FnMut() -> u64| {
+        let text = |next: &mut dyn FnMut() -> u64| {
             let mut s = String::new();
             for _ in 0..(next() % 40) {
                 s.push_str(pieces[(next() % pieces.len() as u64) as usize]);

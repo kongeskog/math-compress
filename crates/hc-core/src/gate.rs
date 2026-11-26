@@ -105,6 +105,15 @@ pub struct CommentInfo {
     pub edited: bool,
 }
 
+/// A pull request as the forge has it at one moment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequestNow {
+    pub open: bool,
+    pub draft: bool,
+    pub base_ref: String,
+    pub head_sha: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommitState {
     Success,
@@ -156,7 +165,14 @@ pub trait Forge {
     /// Create or update the single gate comment on a pull request.
     fn upsert_comment(&mut self, pr: u64, body: &str) -> Result<DateTime<Utc>>;
     fn set_label(&mut self, issue: u64, label: &str, present: bool) -> Result<()>;
-    /// Squash-merge; returns the new commit on the main branch.
+    /// One pull request as it is now. Asked right before a merge: between
+    /// the listing a pass works from and its merge call, the pull request
+    /// can have been closed, turned into a draft, pushed to, or pointed at
+    /// another branch.
+    fn pull_request(&mut self, number: u64) -> Result<PullRequestNow>;
+    /// Squash-merge; returns the commit the merge made. The call names the
+    /// head commit, and the forge refuses if the head is another one. It
+    /// cannot name the branch merged into.
     fn merge(&mut self, pr: &PullRequest, message: &str) -> Result<String>;
     /// Every issue (not pull request), open or closed.
     fn issues(&mut self) -> Result<Vec<IssueInfo>>;
@@ -237,8 +253,20 @@ pub fn format_check(
     body: &str,
     depends: Option<&str>,
 ) -> (Gate, Option<(String, String, String)>) {
+    format_check_with(format, title, body, depends, &[])
+}
+
+/// As [`format_check`], with further problems of the title or description
+/// that the gatekeeper found and an edit repairs.
+pub fn format_check_with(
+    format: &crate::config::Format,
+    title: &str,
+    body: &str,
+    depends: Option<&str>,
+    more: &[String],
+) -> (Gate, Option<(String, String, String)>) {
     let parsed = format.parse_title(title);
-    let mut problems = Vec::new();
+    let mut problems: Vec<String> = more.to_vec();
     if parsed.is_none() {
         problems.push(format!("The title must be {}", format.title_help()));
     }
@@ -566,12 +594,83 @@ pub fn reservation_warning(r: &Reservation, hits: &[String]) -> String {
 }
 
 /// The first line of a comment that is a command, split into words.
-fn command(body: &str) -> Vec<String> {
-    body.lines()
-        .map(str::trim)
-        .find(|l| l.starts_with('/'))
-        .map(|l| l.split_whitespace().map(str::to_string).collect())
-        .unwrap_or_default()
+/// The commands, by the name they are written with once case, `-` and `_`
+/// are set aside, and the name they are known by.
+const COMMANDS: [(&str, &str); 13] = [
+    ("claim", "/claim"),
+    ("unclaim", "/unclaim"),
+    ("release", "/release"),
+    ("accept", "/accept"),
+    ("decline", "/decline"),
+    ("apply", "/apply"),
+    ("endorse", "/endorse"),
+    ("grant", "/grant"),
+    ("revoke", "/revoke"),
+    ("retry", "/retry"),
+    ("approve", "/approve"),
+    ("requestchanges", "/request-changes"),
+    ("waivemin", "/waive-min"),
+];
+
+/// The command a word is, if it is one: `/Request-changes`, `/request_changes.`
+/// and `/requestchanges:` are all `/request-changes`.
+fn command_name(word: &str) -> Option<&'static str> {
+    let bare: String = word
+        .strip_prefix('/')?
+        .trim_end_matches(['.', ',', ':', ';', '!', '?'])
+        .chars()
+        .filter(|c| !matches!(c, '-' | '_'))
+        .flat_map(char::to_lowercase)
+        .collect();
+    COMMANDS.iter().find(|c| c.0 == bare).map(|c| c.1)
+}
+
+/// Every command in a comment, in order: each line that starts with a
+/// command, as the command's name and then its words as written. A line
+/// counts wherever it stands in the comment, after other commands too; a
+/// command in a quotation (`> …`), in backticks or inside a sentence does
+/// not. What follows the command on its line is not made more tolerant by
+/// this: a commit is still named by all its 40 characters.
+pub fn commands_of(body: &str) -> Vec<Vec<String>> {
+    let mut out = Vec::new();
+    for line in body.lines() {
+        // A byte order mark or another character that does not show.
+        let line = line.trim_matches(|c: char| c.is_whitespace() || crate::checks::is_hidden(c));
+        let mut words = line.split_whitespace();
+        let Some(name) = words.next().and_then(command_name) else { continue };
+        out.push(std::iter::once(name.to_string()).chain(words.map(str::to_string)).collect());
+    }
+    out
+}
+
+/// The verdict commands a comment names without giving them: in backticks,
+/// in a quotation or inside a sentence. Whoever wrote one may have meant it.
+pub fn near_commands(body: &str) -> Vec<&'static str> {
+    let given: Vec<String> = commands_of(body).into_iter().map(|c| c[0].clone()).collect();
+    let mut out = Vec::new();
+    for word in body.split(|c: char| c.is_whitespace() || matches!(c, '`' | '(' | ')' | '"' | '\'' | '*' | '>')) {
+        if let Some(name) = command_name(word) {
+            let verdict = matches!(name, "/request-changes" | "/approve" | "/waive-min");
+            if verdict && !given.iter().any(|g| g == name) && !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
+/// The issues a title or description would make the forge close when the
+/// change merges: a closing keyword and a reference (`closes #9`,
+/// `Fixes: owner/name#9`, `resolved https://…/issues/9`).
+pub fn closing_refs(text: &str) -> Vec<u64> {
+    let re = Regex::new(
+        r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+(?:[\w.-]+/[\w.-]+#|#|https?://\S*?/(?:issues|pull)/)(\d+)",
+    )
+    .expect("static regex");
+    let mut out: Vec<u64> = re.captures_iter(text).filter_map(|c| c[1].parse().ok()).collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// Merged changes and tokens saved by one author.
@@ -640,6 +739,15 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
         let current = self.forge.current_verifies()?;
         // Changes whose verification in the line was dispatched in this pass.
         let mut queued_now: BTreeSet<u64> = BTreeSet::new();
+        // Where no approval is needed there is no line: of the changes that
+        // passed and whose result is for an older main, one is verified
+        // again at a time, the oldest first. This is the one whose turn it is.
+        let mut turn: Option<u64> = None;
+        // Its verification is started when the pass has merged what it
+        // could, on main as it is then.
+        let mut turn_job: Option<(PullRequest, Vec<VerifyResult>, Option<u64>)> = None;
+        // How many files each open change touches itself, by its result.
+        let mut files_of: BTreeMap<u64, usize> = BTreeMap::new();
         // `pr@head` of merged changes -> the merge commit.
         let mut merged_heads: BTreeMap<String, String> = past
             .iter()
@@ -933,7 +1041,12 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                 && !results.is_empty()
                 && (dep_blocked.is_some() || undecided || !results.iter().any(|r| own(r)));
             let changed = result.as_ref().map(|r| r.changed_files).unwrap_or(0);
-            let (review, needed, early, edited) = self.review_gate(pr, roles, changed, judged_at)?;
+            files_of.insert(pr.number, changed);
+            // Whether a change is large is asked of everything that is not
+            // on main yet: its own files and those of what it is built on.
+            // (A file both touch is counted twice.)
+            let unmerged: usize = changed + chain.iter().map(|d| files_of.get(d).copied().unwrap_or(0)).sum::<usize>();
+            let (review, needed, early, edited) = self.review_gate(pr, roles, unmerged, judged_at)?;
             // The row is shown where it says something: an approval is
             // needed, or changes were requested. Where the arena requires no
             // approval and nobody objected, there is no row.
@@ -990,7 +1103,7 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                     ));
                 }
             }
-            let (format, parsed) = self.format_gate(pr, dep.problem.as_deref());
+            let (format, parsed) = self.format_gate(pr, dep.problem.as_deref(), &issues);
             let format_ok = format.status == GateStatus::Pass;
             let mut attempt = self.attempt(pr, result.as_ref());
             if let Some((technique, scope, _)) = parsed {
@@ -1211,6 +1324,9 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
 
             if !fresh {
                 let ready = approved && format_ok;
+                // No approval is needed and nothing else holds it: it is
+                // verified again when its turn comes.
+                let takes_turns = needed == 0 && !held && dep_blocked.is_none() && !unchecked && !undecided;
                 // The first change this one is built on whose head is no
                 // longer the one the result shown was verified on top of.
                 let revised = chain.iter().zip(&dep_keys).find(|(_, k)| !result.stack.contains(k)).map(|(d, _)| *d);
@@ -1285,6 +1401,10 @@ format!(
                             format!("It is verified again on main {once_approved}")
                         }
                     )
+                } else if let (true, Some(first)) = (takes_turns && ready, turn) {
+                    format!(
+                        "Main moved. Changes are verified again one at a time, the oldest first; #{first} is being verified now, and this one follows"
+                    )
                 } else if ready {
                     "Main moved; re-verifying on the new main".to_string()
                 } else {
@@ -1294,7 +1414,16 @@ format!(
                 gates.extend(review_row);
                 attempt.gates = gates;
                 attempt.status = status;
-                if ready && in_line && dep_blocked.is_none() && !unchecked {
+                if takes_turns {
+                    // One build for each move of main, whoever opens or
+                    // pushes what: nobody's change is verified on top of a
+                    // stranger's, so nobody's result is lost when a stranger
+                    // pushes again or fails.
+                    if ready && turn.is_none() {
+                        turn = Some(pr.number);
+                        turn_job = Some((pr.clone(), results.clone(), min));
+                    }
+                } else if ready && in_line && dep_blocked.is_none() && !unchecked {
                     // Verify on top of the approved changes ahead of this one,
                     // so the whole line can merge without a rebuild per merge.
                     // It is dispatched at once, in order, even while an older run
@@ -1357,7 +1486,9 @@ format!(
             // A line of approved changes ahead of this one is being verified on
             // today's main. Merging this one first would move main under all of
             // them, so it takes its place at the end of the line instead.
-            if ahead.iter().any(|a| active.contains(a) || queued_now.contains(a)) {
+            // Where no approval is needed there is no such line to keep: a
+            // change that passed on today's main merges now.
+            if needed > 0 && ahead.iter().any(|a| active.contains(a) || queued_now.contains(a)) {
                 let line = Line { main: &main, main_tree: &main_tree, ahead: &ahead, active: &active, merged: &merged_heads };
                 if self.dispatch_stacked(pr, &prs, &line, &results, min, ledger, &mut out.log)? {
                     queued_now.insert(pr.number);
@@ -1398,22 +1529,110 @@ format!(
                 result.metrics.get(&self.cfg.score.primary).unwrap_or(0),
                 delta
             );
+            // The pass has worked from a listing made when it started. Ask
+            // what the pull request is now: it must still be open, not a
+            // draft, at the verified head, and pointed at this branch. The
+            // merge call itself names only the head.
+            let branch = self.cfg.project.branch.clone();
+            let now_is = self.forge.pull_request(pr.number);
+            let unchanged = matches!(&now_is, Ok(p) if p.open && !p.draft && p.base_ref == branch && p.head_sha == pr.head_sha);
+            if !unchanged {
+                out.log.push(match &now_is {
+                    Ok(p) => format!(
+                        "#{}: not merged: it changed while it was being judged (open {}, draft {}, base `{}`, head `{}`)",
+                        pr.number,
+                        p.open,
+                        p.draft,
+                        p.base_ref,
+                        short(&p.head_sha)
+                    ),
+                    Err(e) => format!("#{}: not merged: could not read it before merging: {e:#}", pr.number),
+                });
+                attempt.status = AttemptStatus::Verifying;
+                self.publish_open(
+                    pr,
+                    attempt,
+                    CommitState::Pending,
+                    "Changed while it was being judged; judged again on the next pass",
+                    &mut out,
+                    &mut blocked,
+                    ledger,
+                )?;
+                continue;
+            }
             self.forge.set_status(&pr.head_sha, CommitState::Success, "All gates passed")?;
             match self.forge.merge(pr, &message) {
                 Ok(merge_sha) => {
+                    // What landed, and where: the branch must now be at the
+                    // commit the merge made, and its tree must be the one
+                    // that was verified. Only then is the change recorded
+                    // as merged.
+                    let head_now = self.forge.main_head()?;
+                    let tree_now = self.forge.main_tree()?;
+                    let elsewhere = head_now != merge_sha;
+                    let other_tree = result.merged_tree.as_ref().is_some_and(|t| *t != tree_now);
+                    if elsewhere || other_tree {
+                        paused = Some(if elsewhere {
+                            "Merging is paused: a merge did not land on the branch as its head"
+                        } else {
+                            "Merging is paused: a merge produced a tree that differs from the verified one"
+                        });
+                        out.log.push(if elsewhere {
+                            format!(
+                                "#{}: MERGED AS {merge_sha}, WHICH IS NOT THE HEAD OF `{branch}` ({head_now})",
+                                pr.number
+                            )
+                        } else {
+                            format!("#{}: MERGED TREE DIFFERS FROM THE VERIFIED TREE", pr.number)
+                        });
+                        if ledger.alerts.insert(format!("merge-mismatch@{merge_sha}")) {
+                            self.forge.create_issue(
+                                &if elsewhere {
+                                    format!("Alert: merge of #{} did not land on {branch}", pr.number)
+                                } else {
+                                    format!("Alert: merge of #{} differs from what was verified", pr.number)
+                                },
+                                &if elsewhere {
+                                    format!("The merge of #{} made commit {merge_sha}, and `{branch}` is at {head_now}. Either the pull request was pointed at another branch in the moment between the gatekeeper's last look and its merge call, or something else was pushed to `{branch}` at the same time. The change is not recorded as merged. Merging is paused for this pass and a build of `{branch}` is started. Leaders: find where {merge_sha} landed (`git branch -r --contains {merge_sha}`); if it is on another branch, restore that branch to the commit before it, and look at what the pull request holds.", pr.number)
+                                } else {
+                                    format!("Commit {merge_sha} on `{branch}` has a different tree than the one verification built for #{}. The change is not recorded as merged until a pass finds it so. Merging is paused for this pass and a build of `{branch}` is started. Leaders: compare the two trees.", pr.number)
+                                },
+                                LABEL_ALERT,
+                            )?;
+                        }
+                        // The branch is judged by its own build, as after any merge.
+                        if let Err(e) = self.forge.dispatch_verify(0, &[]) {
+                            out.log.push(format!("could not start a build of `{branch}`: {e:#}"));
+                        }
+                        main = head_now;
+                        main_tree = tree_now;
+                        attempt.status = AttemptStatus::Verifying;
+                        out.open.push(attempt);
+                        continue;
+                    }
                     attempt.status = AttemptStatus::Merged;
                     attempt.decided_at = Some(self.now);
                     attempt.merge_sha = Some(merge_sha.clone());
                     self.forge.set_label(pr.number, LABEL_READY, false)?;
                     self.forge.upsert_comment(pr.number, &self.comment_text(pr, &attempt, ledger))?;
                     main = merge_sha.clone();
-                    main_tree = self.forge.main_tree()?;
+                    main_tree = tree_now;
                     landed.insert(pr.number);
                     merged_heads.insert(key(pr.number, &pr.head_sha), merge_sha.clone());
                     out.current = Some(Point { sha: merge_sha.clone(), at: self.now, metrics: result.metrics });
                     out.log.push(format!("#{}: merged ({delta})", pr.number));
-                    if let Some(idea) = attempt.idea {
-                        if idea_complete(&pr.body) {
+                    // The idea it names is closed only if it is one: an open
+                    // issue in the ideas queue. A number that is something
+                    // else (a pull request, an alert, an application) is
+                    // left alone.
+                    match attempt.idea {
+                        Some(idea) if !self.open_idea(&issues, idea) => {
+                            out.log.push(format!(
+                                "#{}: names #{idea} as its idea, which is not an open idea; nothing was closed",
+                                pr.number
+                            ));
+                        }
+                        Some(idea) if idea_complete(&pr.body) => {
                             // A change made for an idea closes it, unless it says it is a part.
                             let _ = self.forge.comment(
                                 idea,
@@ -1424,7 +1643,8 @@ format!(
                             );
                             let _ = self.forge.close_issue(idea);
                             out.log.push(format!("idea #{idea}: closed, completed by #{}", pr.number));
-                        } else {
+                        }
+                        Some(idea) => {
                             // The author says this is one part of the idea.
                             let _ = self.forge.comment(
                                 idea,
@@ -1434,20 +1654,9 @@ format!(
                                 ),
                             );
                         }
+                        None => {}
                     }
                     out.decided.push(attempt);
-                    // What landed must be exactly what was verified.
-                    if result.merged_tree.as_ref().is_some_and(|t| *t != main_tree) {
-                        paused = Some("Merging is paused: a merge produced a tree that differs from the verified one");
-                        out.log.push(format!("#{}: MERGED TREE DIFFERS FROM THE VERIFIED TREE", pr.number));
-                        if ledger.alerts.insert(format!("tree-mismatch@{merge_sha}")) {
-                            self.forge.create_issue(
-                                &format!("Alert: merge of #{} differs from what was verified", pr.number),
-                                &format!("Commit {merge_sha} on main has a different tree than the one verification built for #{}. Merging is paused for this pass. Leaders: compare the two trees and rebuild main (`verify #0`).", pr.number),
-                                LABEL_ALERT,
-                            )?;
-                        }
-                    }
                 }
                 Err(e) => {
                     out.log.push(format!("#{}: merge failed: {e:#}", pr.number));
@@ -1455,6 +1664,22 @@ format!(
                     out.open.push(attempt);
                 }
             }
+        }
+
+        // The change whose turn it is, on main as this pass leaves it.
+        if let Some((pr, results, min)) = turn_job.filter(|_| paused.is_none()) {
+            let id = key(pr.number, &pr.head_sha);
+            let none: [u64; 0] = [];
+            let line = Line { main: &main, main_tree: &main_tree, ahead: &none, active: &active, merged: &merged_heads };
+            // A run that was started and is neither seen nor reported after
+            // a build's time is started again, or the turn would never pass on.
+            let k = format!("{id}@{main_tree}@{}", if min.is_some() { "@waived" } else { "" });
+            let lost = !active.contains(&pr.number)
+                && ledger.dispatched.get(&k).is_some_and(|t| self.now - *t > Duration::minutes(RUN_GRACE_MINUTES));
+            if lost {
+                ledger.dispatched.remove(&k);
+            }
+            self.dispatch_stacked(&pr, &prs, &line, &results, min, ledger, &mut out.log)?;
         }
 
         // Tell people what they need to know, each thing once. A notice that
@@ -1694,8 +1919,10 @@ format!(
         comments.sort_by_key(|c| c.created_at);
         let mut found = None;
         let mut edited: Vec<String> = Vec::new();
-        for c in comments {
-            let cmd = command(&c.body);
+        for (c, cmd) in comments
+            .into_iter()
+            .flat_map(|c| commands_of(&c.body).into_iter().map(move |cmd| (c.clone(), cmd)).collect::<Vec<_>>())
+        {
             if cmd.first().map(String::as_str) != Some("/waive-min") {
                 continue;
             }
@@ -1808,8 +2035,36 @@ format!(
     }
 
     /// Title and description follow the standard. Editing them needs no new push.
-    fn format_gate(&self, pr: &PullRequest, depends: Option<&str>) -> (Gate, Option<(String, String, String)>) {
-        format_check(&self.cfg.format, &pr.title, &pr.body, depends)
+    ///
+    /// A closing keyword (`closes #9`) in either makes the forge close that
+    /// issue when the change merges, whatever it is: an alert, somebody's
+    /// application. Only an open idea may be named that way.
+    fn format_gate(
+        &self,
+        pr: &PullRequest,
+        depends: Option<&str>,
+        issues: &[IssueInfo],
+    ) -> (Gate, Option<(String, String, String)>) {
+        let mut named = closing_refs(&pr.title);
+        named.extend(closing_refs(&pr.body));
+        named.sort();
+        named.dedup();
+        let not_ideas: Vec<String> =
+            named.into_iter().filter(|n| !self.open_idea(issues, *n)).map(|n| format!("#{n}")).collect();
+        let more = if not_ideas.is_empty() {
+            Vec::new()
+        } else {
+            vec![format!(
+                "The title or description has a closing keyword (close, fix, resolve) before {}, which is not an open idea: merging would close it. Take the keyword out; an idea is named by the `Idea:` line",
+                not_ideas.join(", ")
+            )]
+        };
+        format_check_with(&self.cfg.format, &pr.title, &pr.body, depends, &more)
+    }
+
+    /// Whether `number` is an open issue in the ideas queue.
+    fn open_idea(&self, issues: &[IssueInfo], number: u64) -> bool {
+        issues.iter().any(|i| i.number == number && i.open && i.labels.iter().any(|l| *l == self.cfg.ideas.label))
     }
 
     /// Verify `pr` on today's main with the approved changes ahead of it
@@ -1923,8 +2178,17 @@ format!(
         // only the fact of an edit is visible, not who made it.
         let mut edited: Vec<String> = Vec::new();
         let mut verdicts = self.forge.reviews(pr.number)?;
-        for c in self.forge.pr_comments(pr.number)? {
-            let cmd = command(&c.body);
+        // A review that was dismissed counts as never made: dismissing it
+        // lifts that review, and nothing else its author has said. (Taken
+        // as a verdict of its own, it used to wipe a request for changes
+        // the same person had made in a comment.)
+        verdicts.retain(|v| v.state != "DISMISSED");
+        for (c, cmd) in self
+            .forge
+            .pr_comments(pr.number)?
+            .into_iter()
+            .flat_map(|c| commands_of(&c.body).into_iter().map(move |cmd| (c.clone(), cmd)).collect::<Vec<_>>())
+        {
             match cmd.first().map(String::as_str) {
                 Some("/approve") => {
                     let sha = cmd.get(1).map(String::as_str).unwrap_or("");
@@ -1982,9 +2246,6 @@ format!(
                 "APPROVED" if eligible && v.commit_id == pr.head_sha => {
                     requested.remove(&user);
                 }
-                "DISMISSED" => {
-                    requested.remove(&user);
-                }
                 _ => {}
             }
             match v.state.as_str() {
@@ -2005,9 +2266,6 @@ format!(
                 }
                 "APPROVED" if !own => {
                     unvetted.insert(v.user.clone());
-                }
-                "DISMISSED" => {
-                    latest.remove(&user);
                 }
                 _ => {}
             }
@@ -2110,10 +2368,32 @@ format!(
             if ledger.comments_seen_until.is_some_and(|t| c.created_at <= t) {
                 continue;
             }
-            let cmd = command(&c.body);
-            let Some(name) = cmd.first().map(String::as_str) else { continue };
-            let arg = |i: usize| cmd.get(i).map(|s| s.trim_start_matches('@').to_string()).unwrap_or_default();
             let n = c.issue;
+            // A verdict command that was named and not given (in backticks,
+            // in a quotation, inside a sentence) by someone who could have
+            // given it: said once, so that nobody thinks a change is stopped
+            // when it is not.
+            if let Some(pr) = prs.iter().find(|p| p.number == n) {
+                let near = near_commands(&c.body);
+                if !near.is_empty() && roles.can_review(&c.user) {
+                    self.forge.comment(
+                        n,
+                        &format!(
+                            "@{} your comment names {} without giving it, so nothing was done. A command counts only at the start of a line of its own: not in backticks, not in a quotation, not inside a sentence.{}",
+                            c.user,
+                            near.iter().map(|c| format!("`{c}`")).collect::<Vec<_>>().join(", "),
+                            if near.contains(&"/request-changes") {
+                                format!(" To stop this change, post a line that starts with `/request-changes`; to approve it, `/approve {}`.", pr.head_sha)
+                            } else {
+                                String::new()
+                            }
+                        ),
+                    )?;
+                }
+            }
+            for cmd in commands_of(&c.body) {
+            let name = cmd[0].as_str();
+            let arg = |i: usize| cmd.get(i).map(|s| s.trim_start_matches('@').to_string()).unwrap_or_default();
             let issue = issues.iter().position(|i| i.number == n);
             let has = |label: &str| {
                 issue.is_some_and(|i| issues[i].open && issues[i].labels.iter().any(|l| l == label))
@@ -2341,6 +2621,37 @@ format!(
                         log.push(format!("#{n}: retry requested by {}", c.user));
                     }
                 }
+                "/request-changes" => {
+                    // The request itself is read in the review gate, in
+                    // every pass. This answers the comment, once: whoever
+                    // made the request sees that it holds, and whoever may
+                    // not make one sees that it does not.
+                    let Some(pr) = prs.iter().find(|p| p.number == n) else { continue };
+                    let own = pr.author.eq_ignore_ascii_case(&c.user);
+                    if !roles.can_review(&c.user) {
+                        self.forge.comment(
+                            n,
+                            &format!(
+                                "@{} only leaders and vetted reviewers can stop a change with `/request-changes`; this one is not stopped. What you wrote stays here for them to read.",
+                                c.user
+                            ),
+                        )?;
+                    } else if own && !(roles.bootstrap && leader) {
+                        self.forge.comment(
+                            n,
+                            &format!("@{} a request for changes does not count on a change from your own account.", c.user),
+                        )?;
+                    } else {
+                        self.forge.comment(
+                            n,
+                            &format!(
+                                "Blocked by @{} until they approve the current commit: this change does not merge, whatever its gates say and whatever is pushed, until @{} comments `/approve <commit>` with the full hash of the head commit as it then stands (now: `/approve {}`).",
+                                c.user, c.user, pr.head_sha
+                            ),
+                        )?;
+                        log.push(format!("#{n}: changes requested by {}", c.user));
+                    }
+                }
                 "/approve" => {
                     // The approval itself is read in the review gate. This
                     // only answers a reviewer who named the head commit by a
@@ -2398,6 +2709,7 @@ format!(
                     }
                 }
                 _ => {}
+            }
             }
         }
         if let Some(last) = comments.iter().map(|c| c.created_at).max() {
@@ -2740,7 +3052,8 @@ mod tests {
     /// The same arena without review: no change needs an approval.
     fn cfg_open() -> Config {
         let mut c = cfg();
-        c.review = crate::config::Review::default();
+        c.review.required = 0;
+        c.review.required_large = 0;
         assert!(!c.review.on());
         c
     }
@@ -2787,7 +3100,8 @@ mod tests {
         /// A branch contains whatever is not listed here.
         lacks: BTreeSet<(String, String)>,
         /// Names of forge calls that fail: `dispatch_verify_min`,
-        /// `changed_files`, `changed_between`, `contains`, `comment`.
+        /// `changed_files`, `changed_between`, `contains`, `comment`,
+        /// `pull_request`.
         failing: BTreeSet<&'static str>,
         /// The forge's clock when the current pass started; the helpers that
         /// run a pass set it. The gate comment of a pass is written, and so
@@ -2797,6 +3111,14 @@ mod tests {
         /// forge's time for it. As on GitHub, writing the same text again
         /// changes nothing: the comment keeps the time it was last written.
         gate_comments: BTreeMap<u64, (String, DateTime<Utc>)>,
+        /// What a pull request is when it is asked about right before a
+        /// merge, where that differs from the listing the pass started from.
+        changed_since: BTreeMap<u64, PullRequestNow>,
+        /// The merge call succeeds and the commit lands on another branch:
+        /// the pull request was pointed there after the gatekeeper's last look.
+        merge_lands_elsewhere: bool,
+        /// How often each pull request was asked about singly.
+        asked: Vec<u64>,
     }
 
     /// How long after the start of a pass the mock forge stamps the gate
@@ -2899,8 +3221,20 @@ mod tests {
             self.labels.push((issue, label.into(), present));
             Ok(())
         }
+        fn pull_request(&mut self, number: u64) -> Result<PullRequestNow> {
+            self.fail("pull_request")?;
+            self.asked.push(number);
+            if let Some(now) = self.changed_since.get(&number) {
+                return Ok(now.clone());
+            }
+            let p = self.prs.iter().find(|p| p.number == number).ok_or_else(|| anyhow::anyhow!("no such pull request"))?;
+            Ok(PullRequestNow { open: true, draft: p.draft, base_ref: p.base_ref.clone(), head_sha: p.head_sha.clone() })
+        }
         fn merge(&mut self, pr: &PullRequest, _: &str) -> Result<String> {
             self.merged.push(pr.number);
+            if self.merge_lands_elsewhere {
+                return Ok(landed_at(pr.number, &pr.head_sha));
+            }
             // Main's commit, and with it its tree, depends on what merged:
             // the pull request and the commit that was its head.
             self.main = landed_at(pr.number, &pr.head_sha);
@@ -5105,8 +5439,7 @@ mod tests {
         // The author pushes the fix; it is verified and approved, and merges.
         m.prs[0].head_sha = "1f1ced0111111111111111111111111111111111".into();
         m.prs[0].labels = vec![LABEL_NEEDS_FIX.into()];
-        let mut fixed = stacked(1, "m0", "tree:m0", &[], 900);
-        fixed.head_sha = "1f1ced0111111111111111111111111111111111".into();
+        let fixed = at_head(stacked(1, "m0", "tree:m0", &[], 900), "1f1ced0111111111111111111111111111111111");
         m.extra_results.push(fixed);
         m.reviews.insert(1, vec![approve("bob", "1f1ced0111111111111111111111111111111111")]);
         let out = run(&mut m, &mut ledger, &log);
@@ -5472,9 +5805,20 @@ mod tests {
     }
 
     #[test]
-    fn review_is_off_unless_an_arena_turns_it_on() {
+    fn review_is_on_unless_an_arena_turns_it_off() {
+        // A configuration that says nothing about review requires it, as
+        // every arena did before review became a choice.
         let c: Config = toml::from_str("[project]\nslug = \"t\"\ntitle = \"T\"\nrepo = \"o/r\"\ndir = \"proj\"\n").unwrap();
-        assert!(!c.review.on());
+        assert!(c.review.on());
+        let mut m = green();
+        let out = run_with(&mut m, &c, &mut Ledger::default(), &mut roles(), &[]);
+        assert!(m.merged.is_empty());
+        assert_eq!(out.open[0].status, AttemptStatus::AwaitingReview);
+        // Turning it off is said in full.
+        let c: Config = toml::from_str(
+            "[project]\nslug = \"t\"\ntitle = \"T\"\nrepo = \"o/r\"\ndir = \"proj\"\n[review]\nrequired = 0\nrequired_large = 0\n",
+        )
+        .unwrap();
         let mut m = green();
         run_with(&mut m, &c, &mut Ledger::default(), &mut roles(), &[]);
         assert_eq!(m.merged, [1]);
@@ -5693,7 +6037,7 @@ mod tests {
     }
 
     #[test]
-    fn without_review_a_change_joins_the_line_only_when_its_own_run_has_passed() {
+    fn without_review_there_is_no_line_and_changes_are_verified_again_one_at_a_time() {
         // #1 is still being verified for the first time; #2 passed on today's
         // main. Nothing has judged #1, so #2 does not wait behind it.
         let mut m = base();
@@ -5705,14 +6049,74 @@ mod tests {
         assert_eq!(m.merged, [2]);
         assert!(m.dispatched.is_empty(), "#1 keeps its own run on main alone");
 
-        // Two changes that passed on an older main form a line, in order.
+        // Three changes that passed on an older main: the oldest is verified
+        // again, alone on main; the others wait their turn and say so.
         let mut m = base();
-        for n in [1, 2] {
+        for n in [1, 2, 3] {
             m.prs.push(pr(n, "alice"));
             m.results.insert(key(n, &head(n)), result(n, "old", 900, true));
         }
-        run_open(&mut m, &mut Ledger::default(), &[]);
+        let mut ledger = Ledger::default();
+        let out = run_open(&mut m, &mut ledger, &[]);
         assert!(m.merged.is_empty());
+        assert_eq!(m.dispatched, [1], "one build for this move of main");
+        assert_eq!(m.stacks, [Vec::<u64>::new()], "and on main alone, not on top of anyone's change");
+        assert!(gate_of(open(&out, 1), "fresh").detail.as_deref().unwrap().contains("re-verifying on the new main"));
+        let waits = gate_of(open(&out, 3), "fresh").detail.clone().unwrap();
+        assert!(waits.contains("one at a time, the oldest first; #1 is being verified now"), "{waits}");
+        // Nothing more is started while that run is going.
+        m.active.insert(1);
+        run_open(&mut m, &mut ledger, &[]);
+        assert_eq!(m.dispatched, [1]);
+
+        // It passes and merges; main moved, and the next oldest has its turn.
+        m.active.clear();
+        m.results.insert(key(1, &head(1)), result(1, "m0", 900, true));
+        let out = run_open(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [1]);
+        assert_eq!(m.dispatched, [1, 2], "one build again, for the main that the merge left");
+        // If the oldest fails or is pushed to instead, the turn passes on.
+        let past = out.decided.clone();
+        m.prs.remove(0);
+        m.prs[0].head_sha = "2f1ced0222222222222222222222222222222222".into();
+        m.active.insert(2);
+        run_open(&mut m, &mut ledger, &past);
+        assert_eq!(m.dispatched, [1, 2, 3], "#2 has a new commit and its own first run; #3 is next");
+    }
+
+    /// The reported case: a stranger's change that passed on an older main
+    /// stood first in the line, and a change that was green on today's main
+    /// was queued behind it and rebuilt.
+    #[test]
+    fn a_strangers_stale_change_does_not_hold_a_change_that_is_green_on_todays_main() {
+        let mut m = base();
+        m.prs.push(pr(1, "mallory"));
+        m.results.insert(key(1, &head(1)), result(1, "old", 900, true));
+        m.prs.push(pr(2, "dave"));
+        m.results.insert(key(2, &head(2)), result(2, "m0", 900, true));
+        let mut ledger = Ledger::default();
+        let out = run_open(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [2], "it merges at once");
+        assert_eq!(m.dispatched, [1], "and #1 is verified again on the main that leaves");
+        assert_eq!(m.stacks, [Vec::<u64>::new()]);
+        // The stranger pushes again while that run is going: nobody else's
+        // build is lost, because nobody's was made on top of it.
+        m.active.insert(1);
+        m.prs[0].head_sha = "1f1ced0111111111111111111111111111111111".into();
+        m.prs.push(pr(3, "erin"));
+        m.results.insert(key(3, &head(3)), result(3, &landed(2), 900, true));
+        let past = out.decided.clone();
+        m.prs.remove(1);
+        run_open_at(&mut m, &mut ledger, &past, t(1));
+        assert_eq!(m.merged, [2, 3]);
+    }
+
+    /// With review, the line is as it was: approved changes are verified
+    /// stacked, and one that is green behind a line being verified waits.
+    #[test]
+    fn with_review_the_line_of_approved_changes_is_unchanged() {
+        let mut m = two_stale();
+        run(&mut m, &mut Ledger::default(), &[]);
         assert_eq!(m.stacks, [vec![], vec![1]]);
     }
 
@@ -5776,5 +6180,306 @@ mod tests {
         m.extra_results.push(again);
         run_open_at(&mut m, &mut ledger, &past, t(4));
         assert_eq!(m.merged, [1, 2]);
+    }
+
+    // ---- What an adversarial review of the branch found ----
+
+    /// The reported case: `Idea: #2` named another open pull request, which
+    /// was commented on and closed when the change merged.
+    #[test]
+    fn only_an_open_idea_is_closed_by_the_change_that_names_it() {
+        let mut m = green();
+        m.prs[0].author = "mallory".into();
+        m.prs[0].body = "Shorter.\n\nIdea: #2".into();
+        m.prs.push(pr(2, "dave"));
+        m.active.insert(2);
+        let out = run_open(&mut m, &mut Ledger::default(), &[]);
+        assert_eq!(m.merged, [1]);
+        assert!(m.closed.is_empty(), "#2 is a pull request, not an idea");
+        assert!(m.posted.iter().all(|p| p.0 != 2), "{:?}", m.posted);
+        assert!(out.log.iter().any(|l| l.contains("names #2 as its idea, which is not an open idea")));
+
+        // An issue that is not in the queue, and an idea that is closed already.
+        for issue in [
+            IssueInfo { number: 9, title: "Alert: main does not verify".into(), open: true, labels: vec![LABEL_ALERT.into()], ..Default::default() },
+            IssueInfo { number: 9, open: true, labels: vec![LABEL_PROPOSED.into()], ..idea(9, "eve", &[]) },
+            IssueInfo { open: false, ..idea(9, "eve", &["idea"]) },
+        ] {
+            let mut m = green();
+            m.prs[0].body = "Shorter.\n\nIdea: #9".into();
+            m.issues.push(issue);
+            run_open(&mut m, &mut Ledger::default(), &[]);
+            assert_eq!(m.merged, [1]);
+            assert!(m.closed.is_empty() && m.posted.is_empty(), "{:?} {:?}", m.closed, m.posted);
+        }
+        // An open idea is closed, as before.
+        let mut m = green();
+        m.prs[0].body = "Shorter.\n\nIdea: #9".into();
+        m.issues.push(idea(9, "eve", &["idea"]));
+        run_open(&mut m, &mut Ledger::default(), &[]);
+        assert_eq!((m.merged.as_slice(), m.closed.as_slice()), (&[1][..], &[9][..]));
+    }
+
+    /// The reported case: `closes #9` in the description, where #9 is an
+    /// alert. The forge itself closes what a closing keyword names when the
+    /// change merges, so the description may not have one for anything but
+    /// an open idea.
+    #[test]
+    fn a_closing_keyword_may_name_only_an_open_idea() {
+        assert_eq!(closing_refs("Fixes #12, closes: o/r#13 and resolved https://github.com/o/r/issues/14; see #15"), [12, 13, 14]);
+        assert!(closing_refs("this closes the gap; fix the lemma #3 uses").is_empty());
+        let alert = IssueInfo { number: 9, title: "Alert: main does not verify".into(), open: true, labels: vec![LABEL_ALERT.into()], ..Default::default() };
+        for (title, body) in [
+            ("shorten(Paper/Tree): a shorter proof number 1", "Shorter.\n\nIdea: none\n\ncloses #9"),
+            ("shorten(Paper/Tree): a shorter proof that fixes #9", "Shorter.\n\nIdea: none"),
+        ] {
+            let mut m = green();
+            m.prs[0].author = "mallory".into();
+            m.prs[0].title = title.into();
+            m.prs[0].body = body.into();
+            m.issues.push(alert.clone());
+            let out = run_open(&mut m, &mut Ledger::default(), &[]);
+            assert!(m.merged.is_empty() && m.closed.is_empty(), "{title}");
+            assert_eq!(out.open[0].status, AttemptStatus::NeedsFix);
+            let detail = gate_of(&out.open[0], "format").detail.clone().unwrap();
+            assert!(detail.contains("closing keyword") && detail.contains("#9, which is not an open idea"), "{detail}");
+        }
+        // For the idea the change is made for, the keyword is harmless.
+        let mut m = green();
+        m.prs[0].body = "Shorter.\n\nCloses #9".into();
+        m.issues.push(idea(9, "eve", &["idea"]));
+        run_open(&mut m, &mut Ledger::default(), &[]);
+        assert_eq!((m.merged.as_slice(), m.closed.as_slice()), (&[1][..], &[9][..]));
+    }
+
+    #[test]
+    fn commands_are_read_on_any_line_and_in_any_spelling() {
+        let names = |body: &str| commands_of(body).into_iter().map(|c| c[0].clone()).collect::<Vec<_>>();
+        assert_eq!(names("/cc @alice\n/Request_Changes: slow\n  /retry\n> /approve x\n`/claim`"), ["/request-changes", "/retry"]);
+        assert_eq!(names("/requestchanges."), ["/request-changes"]);
+        assert_eq!(names("/waive_min abc reason"), ["/waive-min"]);
+        assert_eq!(commands_of("/approve ABC, please")[0], ["/approve", "ABC,", "please"]);
+        assert!(names("Please stop: /request-changes").is_empty());
+        assert_eq!(near_commands("Please stop: /request-changes"), ["/request-changes"]);
+        assert_eq!(near_commands("use `/approve` or (`/request-changes`)"), ["/approve", "/request-changes"]);
+        assert!(near_commands("/request-changes\nas I said: /request-changes").is_empty(), "given once is given");
+        assert!(near_commands("see the path a/request-changes and /retry").is_empty());
+    }
+
+    /// The reported cases: of twelve ways a leader might write the request,
+    /// four were read and the others dropped without a word.
+    #[test]
+    fn the_brake_is_read_as_a_leader_writes_it_and_answered() {
+        for (body, stops) in [
+            ("/request-changes", true),
+            ("/cc @alice\n/request-changes this is slow", true),
+            ("/request-changes.", true),
+            ("/Request-changes", true),
+            ("/request_changes", true),
+            ("/requestchanges", true),
+            ("> /retry\n\n/request-changes", true),
+            ("/request-changes: slow", true),
+            ("\u{feff}/request-changes", true),
+            ("/retry\n/request-changes", true),
+            ("Please stop: /request-changes", false),
+            ("`/request-changes`", false),
+            ("> /request-changes", false),
+        ] {
+            let mut m = green();
+            m.pr_comments.insert(1, vec![says(1, "lead", body, 0)]);
+            m.comments = vec![says(1, "lead", body, 0)];
+            let mut ledger = Ledger::default();
+            run_open(&mut m, &mut ledger, &[]);
+            assert_eq!(m.merged.is_empty(), stops, "{body:?}");
+            // Either way the leader is told what happened, once.
+            assert_eq!(m.posted.len(), 1, "{body:?}: {:?}", m.posted);
+            let reply = &m.posted[0].1;
+            if stops {
+                assert!(reply.starts_with("Blocked by @lead until they approve the current commit"), "{body:?}: {reply}");
+                assert!(reply.contains(&format!("`/approve {}`", head(1))), "{reply}");
+            } else {
+                assert!(reply.contains("names `/request-changes` without giving it, so nothing was done"), "{body:?}: {reply}");
+            }
+            run_open(&mut m, &mut ledger, &[]);
+            assert_eq!(m.posted.len(), 1, "{body:?}: answered once");
+        }
+        // Someone who may not stop a change is told so; a mention by them is left alone.
+        let mut m = green();
+        m.pr_comments.insert(1, vec![says(1, "mallory", "/request-changes", 0)]);
+        m.comments = vec![says(1, "mallory", "/request-changes", 0), says(1, "mallory", "what does `/request-changes` do?", 0)];
+        run_open(&mut m, &mut Ledger::default(), &[]);
+        assert_eq!(m.merged, [1]);
+        assert_eq!(m.posted.len(), 1);
+        assert!(m.posted[0].1.contains("only leaders and vetted reviewers can stop a change"), "{:?}", m.posted);
+        // The other commands keep what they ask of a commit: all of it.
+        let mut m = green();
+        m.pr_comments.insert(1, vec![says(1, "bob", &format!("/Approve {}.", head(1)), 0), says(1, "bob", "/approve 1abcdef", 0)]);
+        let out = run(&mut m, &mut Ledger::default(), &[]);
+        assert!(m.merged.is_empty(), "a hash with a full stop on it, or a short one, names no commit");
+        assert_eq!(gate_of(&out.open[0], "review").status, GateStatus::Pending);
+        let mut m = green();
+        m.pr_comments.insert(1, vec![says(1, "bob", &format!("Looks right.\n/cc @alice\n/Approve {}", head(1)), 0)]);
+        run(&mut m, &mut Ledger::default(), &[]);
+        assert_eq!(m.merged, [1], "an approval after another command line counts");
+    }
+
+    /// The reported case: a review by the leader that was later dismissed
+    /// lifted the request the leader had made in a comment.
+    #[test]
+    fn a_dismissed_review_lifts_only_itself() {
+        let dismissed = |at| ReviewInfo { state: "DISMISSED".into(), submitted_at: at, ..approve("lead", "old") };
+        let mut m = green();
+        m.pr_comments.insert(1, vec![says(1, "lead", "/request-changes", 0)]);
+        m.reviews.insert(1, vec![dismissed(soon(1))]);
+        run_open_at(&mut m, &mut Ledger::default(), &[], t(2));
+        assert!(m.merged.is_empty(), "the comment's request stands");
+        // A review that requested changes and was dismissed no longer blocks.
+        let mut m = green();
+        m.reviews.insert(1, vec![dismissed(soon(0))]);
+        run_open_at(&mut m, &mut Ledger::default(), &[], t(2));
+        assert_eq!(m.merged, [1]);
+        // With review: a dismissed review does not take the same person's approval with it.
+        let mut m = green();
+        m.pr_comments.insert(1, vec![says(1, "bob", &format!("/approve {}", head(1)), 0)]);
+        m.reviews.insert(1, vec![ReviewInfo { user: "bob".into(), ..dismissed(soon(1)) }]);
+        run_at(&mut m, &mut Ledger::default(), &[], t(2));
+        assert_eq!(m.merged, [1]);
+    }
+
+    /// The reported case: the leader withdrew the request for the new head
+    /// before the bot's comment on that head. The withdrawal does not count
+    /// (as no approval given then does), and the leader is told to repeat it.
+    #[test]
+    fn a_request_withdrawn_before_the_bots_comment_on_the_commit_is_asked_for_again() {
+        const NEXT: &str = "1f1ced0111111111111111111111111111111111";
+        let mut m = green();
+        m.pr_comments.insert(1, vec![says(1, "lead", "/request-changes", 0)]);
+        let mut ledger = Ledger::default();
+        run_open(&mut m, &mut ledger, &[]);
+        m.prs[0].head_sha = NEXT.into();
+        m.results.insert(key(1, NEXT), at_head(stacked(1, "m0", "tree:m0", &[], 900), NEXT));
+        let early = CommentInfo { issue: 1, user: "lead".into(), body: format!("/approve {NEXT}"), created_at: t(1), edited: false };
+        m.pr_comments.get_mut(&1).unwrap().push(early);
+        for now in [t(1), t(2)] {
+            m.clock = Some(now);
+            Gatekeeper { cfg: &cfg_open(), forge: &mut m, now }.run(&mut ledger, &mut roles(), &[]).unwrap();
+            assert!(m.merged.is_empty());
+        }
+        let told: Vec<&String> = m.posted.iter().map(|p| &p.1).filter(|b| b.contains("@lead your approval")).collect();
+        assert_eq!(told.len(), 1, "{:?}", m.posted);
+        assert!(told[0].contains(&format!("`/approve {NEXT}`")));
+        m.pr_comments.get_mut(&1).unwrap().push(says(1, "lead", &format!("/approve {NEXT}"), 3));
+        run_open_at(&mut m, &mut ledger, &[], t(4));
+        assert_eq!(m.merged, [1]);
+    }
+
+    /// The reported case: where only large changes are reviewed, a change
+    /// built on another counted its own files alone.
+    #[test]
+    fn a_change_is_large_by_the_files_of_everything_that_is_not_on_main_yet() {
+        let mut c = cfg_open();
+        c.review.required_large = 1;
+        // Two changes of 20 files each, the second built on the first, which
+        // a leader holds: together they are 40 files that main does not have.
+        let mut m = pair();
+        for r in m.extra_results.iter_mut() {
+            r.changed_files = 20;
+        }
+        m.pr_comments.insert(1, vec![says(1, "lead", "/request-changes", 0)]);
+        let mut ledger = Ledger::default();
+        let out = run_with(&mut m, &c, &mut ledger, &mut roles(), &[]);
+        assert!(m.merged.is_empty());
+        assert_eq!(open(&out, 1).status, AttemptStatus::ChangesRequested, "20 files: no approval needed, and held");
+        let second = open(&out, 2);
+        assert_eq!(second.status, AttemptStatus::AwaitingReview);
+        assert!(gate_of(second, "review").detail.as_deref().unwrap().contains("0 of 1 approvals"));
+        // Alone on main it is a change of 20 files again.
+        let mut m = pair();
+        for r in m.extra_results.iter_mut() {
+            r.changed_files = 20;
+        }
+        run_with(&mut m, &c, &mut Ledger::default(), &mut roles(), &[]);
+        assert_eq!(m.merged, [1, 2]);
+    }
+
+    /// The reported case: between the listing a pass works from and its
+    /// merge call a pull request can be pointed at another branch (the data
+    /// branch, say); the merge call names only the head commit.
+    #[test]
+    fn a_pull_request_that_changed_since_the_listing_is_not_merged() {
+        let now = |base: &str, head_sha: &str, open: bool, draft: bool| PullRequestNow {
+            open,
+            draft,
+            base_ref: base.into(),
+            head_sha: head_sha.into(),
+        };
+        for (what, state) in [
+            ("pointed at another branch", now("hillclimb-data", &head(1), true, false)),
+            ("pushed to", now("main", "1f1ced0111111111111111111111111111111111", true, false)),
+            ("closed", now("main", &head(1), false, false)),
+            ("made a draft", now("main", &head(1), true, true)),
+        ] {
+            for with_review in [false, true] {
+                let mut m = green();
+                m.changed_since.insert(1, state.clone());
+                if with_review {
+                    m.reviews.insert(1, vec![approve("bob", &head(1))]);
+                }
+                let c = if with_review { cfg() } else { cfg_open() };
+                let out = run_with(&mut m, &c, &mut Ledger::default(), &mut roles(), &[]);
+                assert!(m.merged.is_empty(), "{what}: the merge call is not made");
+                assert_eq!(m.asked, [1]);
+                assert!(out.decided.is_empty());
+                assert_eq!(out.open[0].status, AttemptStatus::Verifying, "{what}");
+                assert!(out.log.iter().any(|l| l.contains("#1: not merged: it changed while it was being judged")), "{what}: {:?}", out.log);
+            }
+        }
+        // If the forge does not answer, nothing merges either.
+        let mut m = green();
+        m.failing.insert("pull_request");
+        run_open(&mut m, &mut Ledger::default(), &[]);
+        assert!(m.merged.is_empty());
+        // Unchanged: asked once, merged.
+        let mut m = green();
+        run_open(&mut m, &mut Ledger::default(), &[]);
+        assert_eq!((m.asked.as_slice(), m.merged.as_slice()), (&[1][..], &[1][..]));
+    }
+
+    /// What remains of that race: the pull request is pointed elsewhere in
+    /// the moment between the last look and the merge call. The merge then
+    /// succeeds somewhere else. It is seen at once: the branch is not at the
+    /// commit the merge made. Nothing is recorded as merged, an alert is
+    /// raised, the branch is built, and nothing more merges in the pass.
+    #[test]
+    fn a_merge_that_did_not_land_on_the_branch_is_not_recorded_and_stops_the_pass() {
+        let mut m = green();
+        m.prs.push(pr(2, "dave"));
+        m.results.insert(key(2, &head(2)), result(2, "m0", 900, true));
+        m.merge_lands_elsewhere = true;
+        let mut ledger = Ledger::default();
+        let out = run_open(&mut m, &mut ledger, &[]);
+        assert_eq!(m.merged, [1], "the call for #1 was made; none for #2 after it");
+        assert!(out.decided.is_empty(), "not recorded as merged");
+        assert!(out.current.is_none(), "the score did not move");
+        assert_eq!(m.created, ["Alert: merge of #1 did not land on main"]);
+        assert!(m.dispatched.contains(&0), "the branch is built");
+        assert_eq!(m.status_text[&head(2)], "Merging is paused: a merge did not land on the branch as its head");
+        assert_eq!(open(&out, 2).status, AttemptStatus::Ready);
+        // The alert is raised once.
+        run_open(&mut m, &mut ledger, &[]);
+        assert_eq!(m.created.len(), 1);
+
+        // The same when it landed on the branch as another tree than was verified.
+        let mut m = base();
+        m.prs.push(pr(1, "alice"));
+        let mut r = stacked(1, "m0", "tree:m0", &[], 900);
+        r.merged_tree = Some("tree:what-was-verified".into());
+        r.landing_tree = r.merged_tree.clone();
+        m.extra_results.push(r);
+        let out = run_open(&mut m, &mut Ledger::default(), &[]);
+        assert_eq!(m.merged, [1]);
+        assert!(out.decided.is_empty());
+        assert_eq!(m.created, ["Alert: merge of #1 differs from what was verified"]);
+        assert!(m.dispatched.contains(&0));
     }
 }

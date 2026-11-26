@@ -28,6 +28,11 @@ pub struct Config {
     pub limits: Limits,
     #[serde(default)]
     pub conduct: Conduct,
+    /// Whether the file has no `[review]` section at all. Review is then
+    /// required as it was before it became a choice (see [`Review`]), and
+    /// the gatekeeper says so in its log. Set by [`Config::load`].
+    #[serde(skip)]
+    pub review_unstated: bool,
 }
 
 /// Rules of conduct, stated in the prompts. What can be counted in the text
@@ -442,8 +447,8 @@ pub struct Guard {
 }
 
 /// Whether a change needs the approval of someone other than its author
-/// before it merges. With both numbers 0 (the default) no approval is
-/// needed. Whatever the numbers, a `/request-changes` from a leader or a
+/// before it merges. With both numbers 0 no approval is needed; the arena
+/// template sets that. A file without the section requires approvals. Whatever the numbers, a `/request-changes` from a leader or a
 /// vetted reviewer blocks a change until the same person approves it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -458,10 +463,15 @@ pub struct Review {
 }
 
 impl Default for Review {
-    /// No approval is needed: a change whose gates all pass merges. An arena
-    /// that wants every change read by a second party sets `required`.
+    /// What holds where the file says nothing: one approval, two for a
+    /// large change, as before review became a choice. No arena stops
+    /// requiring approvals by updating the harness; turning review off
+    /// takes an explicit `required = 0` and `required_large = 0`, which the
+    /// arena template has. The defaults hold for each key on its own, so a
+    /// section with only `required = 0` still asks two approvals of large
+    /// changes.
     fn default() -> Self {
-        Review { required: 0, large_change_files: 20, required_large: 0 }
+        Review { required: 1, large_change_files: 20, required_large: 2 }
     }
 }
 
@@ -546,8 +556,9 @@ impl Config {
     pub fn load(path: &Path) -> Result<Config> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
-        let cfg: Config =
+        let mut cfg: Config =
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        cfg.review_unstated = !text.parse::<toml::Table>().is_ok_and(|t| t.contains_key("review"));
         cfg.validate()?;
         Ok(cfg)
     }
@@ -620,10 +631,14 @@ mod tests {
         assert!(c.tidy_rule().contains("`clear`") && c.tidy_rule().contains("`simp only []`"));
         let off = Conduct { comment_clear: false, comment_disabled_lemmas: false, no_empty_simp_only: false, ..c.clone() };
         assert!(off.tidy_rule().is_empty());
+        // Saying nothing keeps review; turning it off is said in full.
         let r = Review::default();
-        assert!(!r.on() && r.needed(1) == 0 && r.needed(100) == 0);
-        let large: Review = toml::from_str("required_large = 2").unwrap();
+        assert!(r.on() && r.needed(1) == 1 && r.needed(21) == 2);
+        let off: Review = toml::from_str("required = 0\nrequired_large = 0").unwrap();
+        assert!(!off.on() && off.needed(1) == 0 && off.needed(100) == 0);
+        let large: Review = toml::from_str("required = 0").unwrap();
         assert!(large.on() && large.needed(20) == 0 && large.needed(21) == 2);
+
         assert!(c.reviewer_bullets().contains("Explicit steps replaced"));
         c.search_tactics.enabled = true;
         assert!(c.search_rule().contains("at most 10 such calls"));
@@ -642,5 +657,27 @@ mod tests {
         assert!(parsed.search_tactics.enabled);
         assert_eq!(parsed.search_tactics.min_saving, 40);
         assert_eq!(parsed.max_slowdown_pct, 10);
+    }
+
+    #[test]
+    fn a_file_without_a_review_section_keeps_review_and_is_marked() {
+        let dir = std::env::temp_dir().join(format!("hc-config-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = "[project]\nslug = \"t\"\ntitle = \"T\"\nrepo = \"o/r\"\ndir = \"proj\"\n";
+        let load = |rest: &str| {
+            let path = dir.join("hillclimb.toml");
+            std::fs::write(&path, format!("{project}{rest}")).unwrap();
+            Config::load(&path).unwrap()
+        };
+        let c = load("");
+        assert!(c.review_unstated && c.review.on() && c.review.required == 1);
+        let c = load("[review]\nrequired = 0\nrequired_large = 0\n");
+        assert!(!c.review_unstated && !c.review.on());
+        let c = load("[review]\nrequired = 1\n");
+        assert!(!c.review_unstated && c.review.on());
+        // The template that arenas copy turns review off, in so many words.
+        let template: Config = toml::from_str(include_str!("../../../arena/hillclimb.toml")).unwrap();
+        assert!(!template.review.on());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

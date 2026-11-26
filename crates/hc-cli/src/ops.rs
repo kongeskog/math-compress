@@ -93,11 +93,6 @@ fn when(v: &Value, key: &str) -> Option<DateTime<Utc>> {
         .map(|t| t.with_timezone(&Utc))
 }
 
-/// The first line of a comment that is a command.
-fn command(body: &str) -> Option<&str> {
-    body.lines().map(str::trim).find(|l| l.starts_with('/')).and_then(|l| l.split_whitespace().next())
-}
-
 fn run_pr(title: &str) -> Option<u64> {
     let rest = &title[title.find('#')? + 1..];
     rest.chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()
@@ -122,13 +117,16 @@ pub fn collect(cfg: &Config, attempts: &[Attempt], state: Option<&State>, now: D
             ) else {
                 continue;
             };
-            match command(&text(c, "body")) {
-                Some("/approve") => verdicts.entry(number).or_default().push(Verdict { at, approve: true }),
-                Some("/request-changes") => verdicts.entry(number).or_default().push(Verdict { at, approve: false }),
-                Some("/claim") => {
-                    claims.entry(number).or_insert(at);
+            // Every command of the comment, read as the gatekeeper reads them.
+            for cmd in hc_core::gate::commands_of(&text(c, "body")) {
+                match cmd[0].as_str() {
+                    "/approve" => verdicts.entry(number).or_default().push(Verdict { at, approve: true }),
+                    "/request-changes" => verdicts.entry(number).or_default().push(Verdict { at, approve: false }),
+                    "/claim" => {
+                        claims.entry(number).or_insert(at);
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
@@ -248,9 +246,9 @@ mod tests {
 
     #[test]
     fn parses_commands_and_run_titles() {
-        assert_eq!(command("Looks right.\n\n/approve abc1234"), Some("/approve"));
-        assert_eq!(command("no command here"), None);
-        assert_eq!(command("  /request-changes"), Some("/request-changes"));
+        assert_eq!(hc_core::gate::commands_of("Looks right.\n\n/approve abc1234")[0][0], "/approve");
+        assert!(hc_core::gate::commands_of("no command here").is_empty());
+        assert_eq!(hc_core::gate::commands_of("  /request-changes")[0][0], "/request-changes");
         assert_eq!(run_pr("verify #42"), Some(42));
         assert_eq!(run_pr("verify #0"), Some(0));
         assert_eq!(run_pr("something else"), None);

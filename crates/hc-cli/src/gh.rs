@@ -526,6 +526,20 @@ impl Forge for GhForge {
         Ok(())
     }
 
+    fn pull_request(&mut self, number: u64) -> Result<PullRequestNow> {
+        let p = self.get(&format!("pulls/{number}"))?;
+        let head_sha = s(&p["head"], "sha");
+        if head_sha.is_empty() {
+            bail!("pull request #{number} could not be read");
+        }
+        Ok(PullRequestNow {
+            open: s(&p, "state") == "open",
+            draft: p["draft"].as_bool().unwrap_or(false),
+            base_ref: s(&p["base"], "ref"),
+            head_sha,
+        })
+    }
+
     fn merge(&mut self, pr: &PullRequest, message: &str) -> Result<String> {
         if self.dry_run {
             eprintln!("dry-run: merge #{}", pr.number);
@@ -640,7 +654,7 @@ impl Forge for GhForge {
 /// The login under which the gatekeeper comments: that of the Actions token
 /// it runs with. `HC_BOT_LOGIN` names another one, for a gatekeeper run with
 /// another identity.
-fn bot_login() -> String {
+pub fn bot_login() -> String {
     std::env::var("HC_BOT_LOGIN").ok().filter(|l| !l.is_empty()).unwrap_or_else(|| "github-actions[bot]".to_string())
 }
 

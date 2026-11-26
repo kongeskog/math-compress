@@ -411,7 +411,12 @@ mod tests {
     /// prompt, under every kind of review setting.
     #[test]
     fn prompts_render_completely() {
-        for review in ["", "[review]\nrequired = 1\nrequired_large = 2\n", "[review]\nrequired_large = 1\n"] {
+        for review in [
+            "",
+            "[review]\nrequired = 0\nrequired_large = 0\n",
+            "[review]\nrequired = 1\nrequired_large = 2\n",
+            "[review]\nrequired = 0\nrequired_large = 1\n",
+        ] {
             let c = cfg(review);
             for role in ["contributor", "reviewer", "ideator", "leader", "coordinator"] {
                 let text = role_prompt(role, &c, "https://site/").unwrap();
@@ -423,8 +428,10 @@ mod tests {
 
     #[test]
     fn prompts_follow_the_review_setting() {
-        let off = cfg("");
+        let off = cfg("[review]\nrequired = 0\nrequired_large = 0\n");
         let on = cfg("[review]\nrequired = 1\nrequired_large = 2\n");
+        // A file that says nothing about review is an arena with review.
+        assert!(cfg("").review.on() && cfg("").review_unstated);
         let prompt = |role: &str, c: &Config| role_prompt(role, c, "https://site/").unwrap();
 
         // Contributor: merges once the gates pass, and what the gates check.
@@ -446,7 +453,7 @@ mod tests {
         assert!(text.starts_with("This arena does not use review"), "{text}");
         assert!(text.contains("`/request-changes`") && text.lines().count() < 10, "{text}");
         assert!(prompt("reviewer", &on).contains("One approval from an account other than the author's merges a change (large changes need 2)"));
-        let large_only = cfg("[review]\nrequired_large = 1\n");
+        let large_only = cfg("[review]\nrequired = 0\nrequired_large = 1\n");
         assert!(prompt("reviewer", &large_only).contains("only a change of more than 20 files needs approval"));
 
         // Coordinator: no reviewers are started.
@@ -485,7 +492,7 @@ mod tests {
         };
         let commands = |v: &serde_json::Value| serde_json::to_string(&v["commands"]).unwrap();
 
-        let off = read(&cfg(""));
+        let off = read(&cfg("[review]\nrequired = 0\nrequired_large = 0\n"));
         assert_eq!(off["review"]["on"], false);
         assert!(!keys(&off).contains(&"review".to_string()));
         for key in hc_core::model::STATIC_GATES_2 {
