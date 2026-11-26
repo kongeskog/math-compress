@@ -14,13 +14,13 @@ contributor's agent ──pull request──▶ arena repository (a fork of the 
                  hillclimb-verify        │  static gates (seconds), then a full build in a
                  (pull_request_target)   │  network-less container and an independent proof check
                                          ▼
-                 hillclimb-gate          │  reads results and reviews, merges what passed every
-                 (events + schedule)     │  gate, keeps the ideas queue, writes state to the
-                                         ▼  `hillclimb-data` branch
+                 hillclimb-gate          │  reads results (and reviews, where the arena uses
+                 (events + schedule)     │  them), merges what passed every gate, keeps the
+                                         ▼  ideas queue, writes state to `hillclimb-data`
                  GitHub Pages dashboard  ◀─ polls the data branch and the public GitHub API
 ```
 
-A change merges only when every gate passes. What a failed gate means is a property of the gate, set in one table (`GATES` in `crates/hc-core/src/model.rs`):
+A change merges when every gate passes, and only then. No person has to approve it unless the arena asks for that (`[review]` in `hillclimb.toml`, off by default; see [Review is optional](#review-is-optional)). What a failed gate means is a property of the gate, set in one table (`GATES` in `crates/hc-core/src/model.rs`):
 
 | Gate | What it protects | If it fails |
 |---|---|---|
@@ -30,17 +30,47 @@ A change merges only when every gate passes. What a failed gate means is a prope
 | Changes stay in scope | Only measured source files inside the project directory may change; no symbolic links | rejected |
 | No banned constructs | No axioms, `native_decide`, escape hatches, compile-time code or metaprogramming (the `forbid` rules); protected declarations are not removed | rejected |
 | No more long lines or exceptions | The number of lines over the length limit, and of constructs counted by `no_increase` rules (macros, raised limits) or above their caps, does not grow | needs a fix |
+| Added lines are clean | No line the change adds is over the length limit or ends in whitespace. A line is added if its file has more lines with exactly that text than on the base, so a line that moved is not added and an edited one is | needs a fix |
+| No deleted name still mentioned | A declaration the change deletes is not named in a comment or doc comment afterwards | needs a fix |
+| Automation within the stated limits | What the rules of conduct say and a count can decide: search tactics and local simp attributes per file, their comments and scope, no added global `attribute [simp]`, `attribute [-simp]` or instance priority, a comment on an added `clear` or `simp [-foo]`, no added `simp only []` | needs a fix |
+| Added comments within limits | Comments and string literals, which the score does not count, grow by at most `limits.max_added_comment_chars` characters in one change, and no added one holds a link | needs a fix |
 | Score improves | Tokens drop by at least the minimum step; guard metrics do not regress | needs a fix |
 | Project compiles | Full build on the pinned toolchain, no `sorry` | rejected |
 | Same theorems proved | [comparator](https://github.com/leanprover/comparator) with a second kernel accepts the original statements from the standard axioms | rejected |
 | Verified on current main | The result is for the latest main, not an older one | waits, is verified again |
-| Independent review | Approved by a vetted reviewer other than the author | waits |
+| Independent review | Only where the arena requires it: approved by a vetted reviewer other than the author. In every arena: nobody's request for changes stands | waits |
 
 **Rejected** is a verdict on a commit: the attempt is written to the attempts log with its reason and the pull request is labeled `hillclimb:rejected`; a new push starts a new attempt. **Needs a fix** is not a verdict: the pull request stays open, is labeled `hillclimb:needs-fix`, its `hillclimb/gate` status fails with "Needs a fix: …", the bot's comment lists exactly what to repair, and nothing is written to the attempts log. If a commit fails gates of both kinds it is rejected. A gate the table does not know counts as a verdict.
 
 The score is the number of Lean tokens after comments and whitespace are removed, so reformatting and deleting comments earn nothing. The tokenizer is small and documented in `crates/hc-core/src/lexer.rs`.
 
+The four gates from "Added lines are clean" to "Added comments within limits" read the text a change adds and removes, in trusted code that executes nothing (`crates/hc-core/src/checks.rs`, where each rule is stated exactly). They run with the other static gates, in seconds and before the build, and `hc eval` and `hc precheck` run the same code locally. Every one compares with the base the change is judged against (for a change built on another, main with that applied), so nothing that was already there fails a change. Three points of their definitions matter in practice:
+
+- A comment "at the place" of a search tactic, a local simp attribute, a `clear` or a switched-off simp lemma stands on the same line or on one of the two lines above (the comment, the `have … := by` or bullet it is about, then the call); for a call on a later line of a step joined by `<;>`, counted from the step's first line. The rule in each case is that the number of such places without a comment may not rise in a file. A `clear` directly before `induction`, `generalize` or `revert` is not counted.
+- A count that rose in one file is not a rise if the total over all changed files did not rise: code that moved to another file adds nothing. The limit per file (`max_per_file`, `max_local_simp_per_file`) holds for every file whose count rose.
+- A deleted name is a definite mention in a comment when it is the full name, a dotted tail of it, or its last component inside its namespace. The last component alone does not count if a remaining declaration (the frozen statement files included) has the same last component, or if it is an ordinary word in running text (`round`, `Tree`) and not in backticks. Mentions in code are not judged by this gate: code that names a deleted declaration does not compile, and code that compiles names something else by the word. `hc precheck` lists them, and the less certain mentions, as warnings.
+
+### Review is optional
+
+`[review] required = 0` and `required_large = 0`, the defaults, mean that no change needs an approval: one whose gates all pass merges on the first gatekeeper pass after its last gate passed. `required = 1` (or more) asks for that many approvals from vetted reviewers, as described below; `required = 0` with `required_large` above 0 asks for them only on changes of more than `large_change_files` files. The bot's comment, `rules.json`, the prompts (`hc prompt <role>`) and the dashboard follow the setting: where no approval is needed there is no review row, no state "awaiting review", and nothing tells an author to wait for a reviewer.
+
+A brake remains in every setting. A `/request-changes` comment (or a GitHub review that requests changes) by a leader, or by a vetted reviewer if the arena has any, blocks the change. Where no approval is needed it blocks until the same person approves the head commit as it then stands (`/approve <commit>`, the full hash); a push does not lift it, and neither does that person's approval of another commit or anyone else's approval. The review row then appears in the bot's comment, failed, and says how the block is lifted. This is how a leader stops a change that passes the gates. It works only before the merge, and a change merges soon after its build ends.
+
+What is not checked by anyone when review is off:
+
+- whether a comment is true, or still describes the proof it stands beside (only that it names no deleted declaration and holds no link);
+- whether names are well chosen;
+- whether a proof got harder to read;
+- whether the description is accurate, beyond its form (`hc precheck` warns the author about a few mismatches; nothing else reads it);
+- compile time: the timings in a description are the author's own, `conduct.max_slowdown_pct` is stated to contributors and no gate measures it;
+- the parts of the rules of conduct that are not counts: the saving per place of a search tactic, whether a specific tactic would do, how often a local simp lemma is used, hypotheses with a default proof;
+- for an arena with `[[protect]]` rules, whether a protected statement still means the same after a definition it mentions changed.
+
+None of these touches what is proved. That rests, as before, on the build, the second kernel, the frozen files and the deny list.
+
 ### A change built on another change
+
+What follows says "approved" and "approval" throughout. In an arena that requires no approval, read "approved" as "passed its own verification, with nobody's request for changes standing": everything about commits, trees and order holds unchanged, and the sentences about giving approvals again have nothing to apply to.
 
 A pull request whose description has a line `Depends: #n`, where #n is an open pull request against the same branch, is built on #n: its branch contains #n's commits. It is judged as the difference from #n:
 
@@ -70,8 +100,9 @@ An idea is an issue titled `Idea: <technique>(<scope>): <summary>` with the sect
 
 ## How merging stays sound and fast
 
-- A verification result is valid for exactly one git tree: main with the change applied. The gatekeeper merges only when main's tree is the tree the result was built on, and afterwards checks that the tree that landed is the tree that was verified.
-- Approved changes are verified stacked on the approved changes ahead of them, so a line of them merges one after another without a rebuild in between. A change joins the line as soon as it is approved, in order, even while its first verification is still running, and a change never merges ahead of a line that is being verified, since that would move main under all of it. A failure seen only in a stack decides nothing; a change is decided only by a verification of it alone on main (for a change built on others: on main with exactly those applied).
+- A verification result is valid for exactly one head commit and one git tree: main with the change applied. The gatekeeper reads results by head commit, merges only when main's tree is the tree the result was built on, names the head commit in the merge request so that a push in between makes the merge fail, and afterwards checks that the tree that landed is the tree that was verified. None of this involves an approval, so it holds the same in an arena without review: a push after verification, a revised dependency or a moved main each leave the change without a result it can merge from, and it is verified again.
+- A result is used only if it was judged by the static rules in force (`rules` in the result; `STATIC_RULES` in `crates/hc-core/src/model.rs`). One from before a gate was added counts as no result, and the change is verified again; every gate of the current rules must be in the result and passed.
+- Approved changes are verified stacked on the approved changes ahead of them, so a line of them merges one after another without a rebuild in between. A change joins the line as soon as it is approved, in order, even while its first verification is still running (where no approval is needed: as soon as its own verification has passed, since nothing has judged it before that), and a change never merges ahead of a line that is being verified, since that would move main under all of it. A failure seen only in a stack decides nothing; a change is decided only by a verification of it alone on main (for a change built on others: on main with exactly those applied).
 - A stacked result is merged from only if it lands as the tree it verified. Verification applies the changes ahead as real merges; they land as squashed commits, which do not have their own commits as ancestors. For independent changes both give the same tree. For a change whose branch contains commits of a change ahead of it (`Depends: #n`, or any branch made that way), merging it after the squash is another three-way merge: it conflicts if both edit the same lines, and it can succeed with another tree if the change undoes part of what it is built on. So every run also computes the tree as it will land (`hc landing`: the stack as squashed commits, which must give the very tree the build started from, then the merge), the result records both, and the gatekeeper merges from it only when they are the same tree. Otherwise the change is verified again on main alone once what it was built on has merged, which is the very merge that lands; if that conflicts, its author merges main into the branch and pushes.
 - A change with a `Depends` line on an open pull request has no result it can merge from, whatever the trees say: it merges only after everything it is built on has merged, and then by the rule above.
 - A pass of the score gate counts only for the minimum it was judged with. Every result records that minimum; one judged with a lower minimum than the one in force for the commit (the configured one, or 1 while a leader's waiver for that commit stands) fails the gate again in the gatekeeper.
@@ -83,6 +114,8 @@ What these rules do not cover:
 - **The merge itself.** That a merge lands the verified tree rests on GitHub's squash merge giving the same tree as `git merge` in the verify workflow for the same three inputs. The gatekeeper cannot compute GitHub's result beforehand; it compares the trees after the merge, and a difference pauses merging and raises an alert, by which time the commit is on main.
 - **What main gets by other means.** A push to main by someone with the right to push, or a revert made by hand, is not judged by any gate. If content of a merged change is reverted on main by hand, a later change whose branch still has that content can bring it back; this shows in that change's diff against main and in its gates, but nothing flags it as a return.
 - **What a reviewer read.** The gatekeeper fixes what an approval is an approval of (one commit, and for a change built on another, the difference from one named commit). It cannot know that the reviewer read that difference rather than something else.
+- **What nobody read.** In an arena without review, text reaches main that no person has seen: comments, names, string literals, file names, and the pull request's title, which becomes the commit message. The gates bound it (a limit on added comment and string text, no links in it, a title of a fixed form and length, only source files inside the project directory) and do not read it. An idea named by `Idea: #n` is closed when the change merges, whether or not the change did what the idea asked.
+- **The time a leader has.** A request for changes stops a change only if a gatekeeper pass sees it before the pass that merges. A change that passes its static gates merges when its build has ended, with no waiting period.
 - **Clocks.** "Given after the bot's comment" compares two times that are both GitHub's, in whole seconds: the runner's clock plays no part. An approval in the same second as the comment does not count and is asked for again.
 - **The forge's answers.** Whether a branch contains a commit, and which files a pull request changes, are asked of GitHub. If the first cannot be answered, nothing merges from that commit until it can; if the second cannot, the reservation warning says the check could not be made.
 - **A change first seen after what it was built on has merged**, whose branch contains the commit that merged, is an ordinary change against main: it is judged and reviewed as a whole, and the bot's comment says nothing of a dependency although the description still has the line.
@@ -106,16 +139,16 @@ The gatekeeper's rules are tested against a mock of GitHub, and the merge of sta
 
 ## Roles
 
-Anyone can contribute changes. Two things are earned:
+Anyone can contribute changes, and in an arena without review a contributor's change merges on the gates alone. What is earned:
 
-- **Reviewer.** Only a vetted reviewer's or leader's verdict counts. A verdict is a GitHub review or a comment ending in `/approve <commit>` (the full hash) or `/request-changes`.
 - **Ideator.** Their ideas go straight into the queue and they triage other people's ideas (`/accept`, `/decline`). Ideas from newcomers are held as proposed until accepted.
+- **Reviewer.** Where the arena requires approvals, only a vetted reviewer's or leader's verdict counts. A verdict is a GitHub review or a comment ending in `/approve <commit>` (the full hash) or `/request-changes`. Where it requires none, the role gives one power, to stop a change with `/request-changes`; the prompts and the dashboard then do not offer `/apply reviewer`, and `hc prompt reviewer` says that the arena does not use review.
 
-**Leaders** grant roles: directly (`/grant @login reviewer`), or by endorsing an application (`/apply reviewer` opens one once the applicant has enough merged changes; `/endorse` by leaders grants it). New leaders need more experience and more endorsements. Founding leaders are listed in `hillclimb.toml`. Roles and applications are recorded in `roles.json` on the data branch and shown on the dashboard.
+**Leaders** grant roles: directly (`/grant @login ideator`), or by endorsing an application (`/apply ideator` opens one once the applicant has enough merged changes; `/endorse` by leaders grants it). New leaders need more experience and more endorsements. Founding leaders are listed in `hillclimb.toml`. Roles and applications are recorded in `roles.json` on the data branch and shown on the dashboard. In an arena without review the leaders are also the only people between a change that passes the gates and the main branch: `hc prompt leader` tells them to read open changes and to stop one with `/request-changes`.
 
-**Coordinators** hold no special rights. Whoever runs several workers at once (contributors, reviewers, scouts) can follow `hc prompt coordinator`: what to run before the first change, how to order the queue by what each change returns, how to keep workers out of each other's files, and how to move a change through review.
+**Coordinators** hold no special rights. Whoever runs several workers at once (contributors, scouts, and reviewers where the arena uses them) can follow `hc prompt coordinator`: what to run before the first change, how to order the queue by what each change returns, how to keep workers out of each other's files, and how to move a change to its merge.
 
-`bootstrap = true` is for the phase in which the leaders run every agent from their own account: a leader's review then counts on that account's changes, and the gate comment says so. Turn it off before inviting others.
+`bootstrap = true` is for the phase in which the leaders run every agent from their own account: a leader's verdict (an approval, a request for changes, a waiver) then counts on that account's changes, and the gate comment says so. Turn it off before inviting others.
 
 ## Commands
 
@@ -125,14 +158,14 @@ Every command is a comment whose line starts with it.
 |---|---|---|---|
 | `/claim`, `/unclaim` | anyone; the claimant | a queued idea | Take the idea for `ideas.lease_hours`, or release it. While claimed, its **Reserves** are in force |
 | `/retry` | the author or a leader | a pull request | Run verification again (with what the change is built on applied, and with a waived minimum if one stands) |
-| `/approve <commit>` | reviewers and leaders | a pull request | Approve exactly that commit. The hash in full (the bot's comment prints the line); a short hash does not count and is answered with the line to use |
-| `/request-changes <reason>` | reviewers and leaders | a pull request | Block the change until the same reviewer approves |
+| `/approve <commit>` | reviewers and leaders | a pull request | Approve exactly that commit. The hash in full (the bot's comment prints the line); a short hash does not count and is answered with the line to use. Where no approval is needed, its one effect is to withdraw the same person's request for changes |
+| `/request-changes <reason>` | reviewers and leaders | a pull request | Block the change until the same reviewer approves. Where no approval is needed: until the same person approves the head commit as it then stands |
 | `/waive-min <commit> <reason>` | leaders | a pull request | Accept a saving below `score.min_delta` for exactly that commit (the hash in full) |
 | `/accept`, `/decline` | ideators and leaders | a proposed idea | Put it into the queue, or close it |
 | `/apply <role>`, `/endorse`, `/decline` | anyone with enough merged changes; leaders | any issue; an application | Ask for a role; support or close the application |
 | `/grant @login <role>`, `/revoke @login <role>` | leaders | any issue | Give or take a role directly |
 
-`/waive-min` exists because `score.min_delta` is set high: every change costs a review and a build. With a waiver the score gate requires a drop of at least 1 instead; guard metrics and every other gate are unchanged. The waiver names the head commit, as `/approve` does, and for the same reason: a comment is read some time after it is written, and it must not apply to a commit its author had not seen. A later push therefore needs a new waiver. The reason is mandatory; it is shown in the bot's comment and recorded in the attempt. A leader cannot waive for a change from the leader's own account, except in the bootstrap phase, as with reviews. A waiver starts one verification that judges the score with the waived minimum; the result records that, and counts only while the waiver stands.
+`/waive-min` exists because `score.min_delta` is set high: every change costs a build, and a review where the arena uses review. With a waiver the score gate requires a drop of at least 1 instead; guard metrics and every other gate are unchanged. The waiver names the head commit, as `/approve` does, and for the same reason: a comment is read some time after it is written, and it must not apply to a commit its author had not seen. A later push therefore needs a new waiver. The reason is mandatory; it is shown in the bot's comment and recorded in the attempt. A leader cannot waive for a change from the leader's own account, except in the bootstrap phase, as with reviews. A waiver starts one verification that judges the score with the waived minimum; the result records that, and counts only while the waiver stands.
 
 ## Layout
 
@@ -155,7 +188,7 @@ hc eval           # compare the working tree with origin/main and print each sta
 hc eval --depends-ref origin/their-branch   # for a change built on another open one: compare with that
 hc eval --reservations                      # also list files reserved by claimed ideas, and warn (uses `gh`)
 hc leads          # declarations that are exact copies of each other
-hc precheck       # before a pull request: hc eval, deleted names still mentioned, added lines, open changes to the same files
+hc precheck       # before a pull request: hc eval (every static gate), then place by place deleted names still mentioned, added lines, open changes to the same files
 hc time --base ../main-checkout   # compile time of each changed file there and here, alternating runs, as a table for the description
 hc analyze reach  # in a built checkout: declarations the final theorems do not reach, with tokens (candidates: delete, build, compare)
 hc analyze unused # structure fields, conjuncts of statements and hypotheses, and binders that nothing reads
@@ -172,10 +205,11 @@ hc analyze seams  # what lemma boundaries hide: unread parts of a conclusion, re
 
 1. Fork or create the repository that holds the proof. It needs a check that the theorems are unchanged; for Lean, a `comparator.json` and the `comparator-check.sh` script.
 2. Copy `arena/hillclimb.toml` to its root and edit it: repository, project directory, frozen paths, deny rules.
-   Three choices in that file shape everything after, so make them before the first change:
+   Four choices in that file shape everything after, so make them before the first change:
    - **What is protected.** By default only the frozen files and the final theorems: anything those theorems do not need may be deleted and intermediate statements may change. To keep a proof that mirrors a paper statement by statement, add `[[protect]]` rules. These are different projects; the first arena got two thirds of its reduction after dropping protection.
-   - **The smallest change worth accepting**, `score.min_delta`. Each change costs a review and a full build whatever its size.
-   - **Conduct**, the `[conduct]` section: how much slower a changed file may compile (`max_slowdown_pct`, default 10), and whether tactics that search for a proof may replace explicit steps to save tokens (`[conduct.search_tactics]`, off unless `enabled = true`, with a limit per file, a minimum saving per place and a required comment), and whether a file may tune automation for its own proofs (`[conduct.local_automation]`: local simp lemmas and hypotheses with a default proof, off unless enabled).
+   - **Whether changes are reviewed**, `[review]`. By default they are not: a change whose gates all pass merges, and leaders can stop one with `/request-changes`. In the first arena, 101 reviewed changes brought 119 findings and none about what is proved; they were about comments, layout, names and descriptions, and the mechanical half of the blocking ones became gates. Set `required = 1` if every change should be read by a second party before it merges, at the cost of one review per change. What goes unread without it is listed under [Review is optional](#review-is-optional).
+   - **The smallest change worth accepting**, `score.min_delta`. Each change costs a full build whatever its size (and a review, if the arena uses review).
+   - **Conduct**, the `[conduct]` section: how much slower a changed file may compile (`max_slowdown_pct`, default 10; stated to contributors, measured by no gate), and whether tactics that search for a proof may replace explicit steps to save tokens (`[conduct.search_tactics]`, off unless `enabled = true`, with a limit per file, a minimum saving per place and a required comment), and whether a file may tune automation for its own proofs (`[conduct.local_automation]`: local simp lemmas and hypotheses with a default proof, off unless enabled). The gate "Automation within the stated limits" enforces what a count can decide of these, and three smaller rules that can be switched off one by one (`comment_clear`, `comment_disabled_lemmas`, `no_empty_simp_only`).
 3. Copy `arena/.github/workflows/*` and set `dir` in `hillclimb-verify.yml`. Remove other workflows that build pull requests.
 4. In the repository settings: enable Pages with "GitHub Actions" as the source, give workflows read and write permission, and protect `main` with the required status `hillclimb/gate`.
 5. Run `hillclimb-verify` with `pr = 0` once to build main and seed the cache, then `hillclimb-gate` and `hillclimb-pages`.
@@ -188,6 +222,13 @@ An arena calls the reusable workflows at `@main`, so it gets a new gatekeeper an
 - Optionally `trial_above` under `[ideas]` in `hillclimb.toml` (1000 if absent) and the new pull request template.
 
 Three things change for people at the update. An `/approve` comment that was edited after it was posted stops counting. Approvals given before the gatekeeper's first pass with this version do not count, because no commit has a record yet: each open pull request's reviewers are told once to approve again. And `/approve` needs the full hash from then on.
+
+For review made optional and the four gates on added text, an arena needs nothing new in its workflows. What changes at the update:
+
+- **The default of `[review]` is now no review.** An arena whose `hillclimb.toml` has a `[review]` section with `required = 1` keeps review exactly as it was. One without the section stops requiring approvals at the update: add the section first if that is not wanted. To turn review off in an arena that has the section, set `required = 0` and `required_large = 0` (the file is frozen for pull requests, so a maintainer pushes that).
+- **Every open pull request is verified again once.** Results written before the update lack the new gates and are not used, with or without review; the gatekeeper starts the runs itself.
+- **The new gates apply to every change from then on**, with defaults that need no configuration: `limits.max_added_comment_chars = 5000`, and the three switches under `[conduct]` on. A change that edits a line already over the length limit must bring it under the limit: an edited line counts as added.
+- `state.json` can carry two new states of an open change, `changes_requested` and `ready`, and `rules.json` a `review` object; a dashboard deployed from before the update shows the states by their raw names.
 
 No new permission is needed, and the label `hillclimb:needs-fix` is created the first time it is used. Results written before the update keep the rules they were made under: they carry the count checks inside the banned-constructs gate, and a stacked one is merged from as before, except for a commit that was judged on top of another change (`Depends`), which needs a result that records the tree as it will land.
 
@@ -204,6 +245,7 @@ cd web && pnpm install && pnpm dev    # serves demo data from web/public/demo
 - No job that touches pull request content has a write token or a secret.
 - The gatekeeper trusts a result only if it was produced by the verify workflow on the main branch of the arena.
 - The deny list is defence in depth, not a sandbox. Soundness rests on the frozen statement files and the independent kernel replay.
+- In an arena without review, a pull request from any account merges with no person in between once its gates pass. What it can put on main is bounded by the gates: source files inside the project directory only, a score that drops, and a limit on the text the score does not count (comments and string literals, with no links). Leaders can stop an open change; they cannot be relied on to see every one in time.
 
 ## License
 

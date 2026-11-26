@@ -22,5 +22,6 @@ Idea: none
 <!-- Only if this branch is built on another open pull request of this repository (it contains
      that pull request's commits): add, below this comment, a line of its own that reads
      "Depends: #" followed by that pull request's number.
-     The change is then measured, verified and reviewed as the difference from that pull request,
+     The change is then measured and verified (and, where the arena uses review, reviewed) as the
+     difference from that pull request,
      and merges after it. The line belongs to the commit: changing it later needs a new push. -->

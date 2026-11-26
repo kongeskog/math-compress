@@ -181,7 +181,8 @@ enum Cmd {
         #[arg(long)]
         data: PathBuf,
     },
-    /// Print one role's instructions (contributor, reviewer, ideator or leader).
+    /// Print one role's instructions (contributor, reviewer, ideator, leader
+    /// or coordinator), as they read under the arena's settings.
     Prompt {
         role: String,
         #[arg(long, default_value = ".")]
@@ -222,7 +223,7 @@ enum Cmd {
     /// checkout has no `.lake/build` and warns when modules are older than
     /// their sources. A file that does not compile cannot be timed and makes
     /// the exit code non-zero; being over the limit does not (timings are
-    /// noisy; a reviewer judges).
+    /// noisy, and no gate enforces the limit).
     Time {
         /// Files to time, relative to the repository root. Defaults to the
         /// counted files that differ from the base ref; files that exist on
@@ -728,6 +729,7 @@ fn eval_cmd(
             stack: trees.2,
             landing_tree: extra.landing_tree,
             min_delta: Some(cfg.score.min_delta),
+            rules: STATIC_RULES,
             metrics: h.metrics,
             base_metrics: b.metrics,
             gates,
@@ -977,6 +979,10 @@ mod tests {
         assert_eq!(strict.gate("improves").unwrap().status, GateStatus::Fail);
         assert_eq!(strict.landing_tree.as_deref(), Some("t2"));
         assert!(strict.gate("no_increase").is_some());
+        assert_eq!(strict.rules, STATIC_RULES);
+        for key in STATIC_GATES_2 {
+            assert_eq!(strict.gate(key).unwrap().status, GateStatus::Pass, "{key}");
+        }
         let waived = run(Some(1));
         assert_eq!(waived.min_delta, Some(1));
         assert_eq!(waived.gate("improves").unwrap().status, GateStatus::Pass);

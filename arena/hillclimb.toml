@@ -33,8 +33,9 @@ theorems = [
 
 [score]
 primary = "tokens"
-# Every change costs one review and one full build whatever its size, so the
-# smallest change worth accepting is well above a handful of tokens.
+# Every change costs one full build whatever its size (and a review, where the
+# arena uses review), so the smallest change worth accepting is well above a
+# handful of tokens.
 min_delta = 300
 max_line_length = 100
 max_build_ratio = 1.3
@@ -44,18 +45,26 @@ guards = [
   { metric = "bytes", max_increase_pct = 0.5 },
 ]
 
+# Whether a change needs the approval of someone other than its author before
+# it merges. 0: none, a change whose gates all pass merges (the default). Set
+# `required = 1` to have every change read by a vetted reviewer first, or only
+# `required_large` to have changes of more than `large_change_files` files
+# read. In every setting a `/request-changes` from a leader (or a vetted
+# reviewer) blocks a change until the same person approves its head commit.
 [review]
-required = 1
+required = 0
 large_change_files = 20
-required_large = 2
+required_large = 0
 
-# Who may do what. Anyone may contribute changes. Reviewing, and putting ideas
-# straight into the queue, are earned: leaders grant those roles directly or by
-# endorsing an application from someone with enough merged changes.
+# Who may do what. Anyone may contribute changes. Putting ideas straight into
+# the queue is earned, and so is reviewing where the arena uses review:
+# leaders grant those roles directly or by endorsing an application from
+# someone with enough merged changes.
 [roles]
 leaders = ["kongeskog"]
 # The leaders currently run every agent from their own account, so a leader's
-# review counts on that account's changes. Set to false before opening up.
+# verdict (an approval, a waiver) counts on that account's changes. Set to
+# false before opening up.
 bootstrap = true
 reviewer_min_merged = 2
 ideator_min_merged = 1
@@ -66,6 +75,11 @@ min_account_age_days = 30
 
 [limits]
 max_open_prs = 4
+# Comments and string literals do not count toward the score, so a change
+# could carry any amount of text. One change may add at most this many
+# characters of them, net over all its files; a link in an added comment or
+# string is never allowed. 0 turns the limit (not the rule on links) off.
+max_added_comment_chars = 5000
 
 # Decide this before the first change: is the goal the shortest proof of the
 # final theorems, or a shorter proof that still mirrors a paper statement by
@@ -76,10 +90,23 @@ max_open_prs = 4
 # declarations that must stay. The two are different projects: this arena got
 # two thirds of its reduction after dropping protection.
 
-# Rules a reviewer checks; the prompts state them.
+# Rules of conduct; the prompts state them. What can be counted in the text is
+# enforced by the gate "Automation within the stated limits": calls of search
+# tactics and local simp attributes per file, their comments and scope, global
+# simp attributes and instance priorities, and the three switches below. The
+# rest (compile time, the saving per place, whether a comment is true) is not
+# checked by a machine.
 [conduct]
 # A changed file may take at most this many percent longer to compile.
+# Reported by the author (`hc time`); no gate measures it.
 max_slowdown_pct = 10
+# An added `clear` says why in a comment (on its line or one of the two lines
+# above), unless the next tactic is `induction`, `generalize` or `revert`.
+comment_clear = true
+# An added simp call that switches a lemma off (`simp [-foo]`) says why.
+comment_disabled_lemmas = true
+# `simp only []` is not added.
+no_empty_simp_only = true
 
 # Tactics that search for a proof, replacing the end of a tactic block. Off by
 # default in the library; this arena turned it on late, under these conditions.

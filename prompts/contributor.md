@@ -38,19 +38,20 @@ Banned:
 
 {{protect_contributor}}
 
-Also banned, and checked by a reviewer: obfuscation, unreadable names, packing unrelated steps into one line, changes that make the build print new warnings (for example deleting an option that silences a linter instead of fixing what it reports), or anything that lowers the number without making the proof genuinely simpler.{{conduct_contributor}}
+{{#review}}Also banned, and checked by a reviewer:{{/review}}{{^review}}Also banned. No gate can check these, and in this arena nobody reads a change before it merges, so they rest on you (a leader who sees one can stop the change, or have it repaired after it merged):{{/review}} obfuscation, unreadable names, packing unrelated steps into one line, changes that make the build print new warnings (for example deleting an option that silences a linter instead of fixing what it reports), or anything that lowers the number without making the proof genuinely simpler.{{conduct_contributor}}
 
 ## Before you open a pull request
 
 1. Run the build in `{{dir}}/` and make sure it succeeds with no errors and no `sorry`.
 2. Run `git fetch --all`, then from the repository root run `hc eval`. It compares your working tree with `{{branch}}` of {{repo}} (whichever git remote points there) and prints each gate. Passing here is necessary, not sufficient: it does not build anything, so always build first. Every gate must pass. If the score did not drop by at least {{min_delta}}, do not submit.
 3. Keep the change focused: one idea per pull request. Small changes verify faster and conflict less.
-4. Run `hc precheck` from the repository root (with `--title "<title>" --body-file <file>` once you have written the description). It runs `hc eval` and also reports a deleted declaration still named anywhere in `{{dir}}/` (comments and module docs included), added lines over the length limit or broken in the middle of a product, counts of files in the description that do not match the diff, and open pull requests that change the same files. Fix every error it reports and look at every warning.
-5. Then read your own diff once as a reviewer would. Most requests for changes are about these, and each costs a review round:
+4. Run `hc precheck` from the repository root (with `--title "<title>" --body-file <file>` once you have written the description). It runs `hc eval`, so every static gate, and shows place by place what they found: a deleted declaration still named in a comment or module doc anywhere in `{{dir}}/`, and added lines over the length limit or ending in whitespace. It also warns about things no gate fails on: a deleted name that still occurs in code, lines broken in the middle of a product, counts of files in the description that do not match the diff, and open pull requests that change the same files. Fix every error it reports and look at every warning.
+5. Then read your own diff once{{#review}} as a reviewer would. Most requests for changes are about these, and each costs a review round:{{/review}}{{^review}}, line by line. Nobody else reads it before it merges, and no machine checks these:{{/review}}
    - a comment or doc comment at a place you changed describes the proof or statement as it was before, or names a hypothesis that is no longer in scope there;
    - a hypothesis kept a name that described the old statement;
-   - the other counts in your description (sites, lemmas) do not match the diff;
-   - a line you added is broken between a function and its argument.
+   - the description says something the diff does not do, or its other counts (sites, lemmas) do not match the diff;
+   - a line you added is broken between a function and its argument;
+   - a proof became harder to follow than the one it replaces.
 6. If you replaced explicit steps by automation, or inlined a lemma into a long proof, time the changed files with `hc time --base <a built checkout of {{branch}}>` (build both checkouts first) and paste the Markdown table it prints into the description. Automation over nonlinear arithmetic is the usual cause of a slow file; so are extra hypotheses left in scope, which slow every later step: clear them.
 7. Run `hc precheck` once more after your last edit, with `--title` and `--body-file`: it also checks the title format and line length.
 
@@ -66,10 +67,19 @@ The title and description follow a standard, and a change that ignores it does n
 
 You may have at most {{max_open_prs}} pull requests open at once.
 
-Building on a change that has not merged yet: if your change needs another open pull request of {{repo}} (a follow-up to a large change, for example), do not wait for it to merge. Branch from that pull request's head, and put a line `Depends: #<its number>` in your description. Your change is then measured, verified and reviewed as the difference from that pull request (in the steps above, run `hc eval` and `hc precheck` with `--depends-ref <its branch or commit>` to see the same numbers locally), and it merges right after it. Your branch must contain that pull request's head commit. If that pull request is revised, the bot's comment says so: merge its branch into yours and push. If it merged as another commit than the one your branch has, merge `{{branch}}` into your branch and push. If it has merged and the bot reports a conflict, merge `{{branch}}` into your branch and push. If it is closed instead, rebase onto `{{branch}}`, remove the line and push. The line belongs to the commit: changing or removing it needs a new push, and a push needs a new review. Use it only for a real dependency; changes that do not need each other merge faster apart.
+Building on a change that has not merged yet: if your change needs another open pull request of {{repo}} (a follow-up to a large change, for example), do not wait for it to merge. Branch from that pull request's head, and put a line `Depends: #<its number>` in your description. Your change is then measured{{#review}}, verified and reviewed{{/review}}{{^review}} and verified{{/review}} as the difference from that pull request (in the steps above, run `hc eval` and `hc precheck` with `--depends-ref <its branch or commit>` to see the same numbers locally), and it merges right after it. Your branch must contain that pull request's head commit. If that pull request is revised, the bot's comment says so: merge its branch into yours and push. If it merged as another commit than the one your branch has, merge `{{branch}}` into your branch and push. If it has merged and the bot reports a conflict, merge `{{branch}}` into your branch and push. If it is closed instead, rebase onto `{{branch}}`, remove the line and push. The line belongs to the commit: changing or removing it needs a new push{{#review}}, and a push needs a new review{{/review}}. Use it only for a real dependency; changes that do not need each other merge faster apart.
 
-Then wait. Verification runs automatically: static gates in seconds, then a full build and an independent proof check that take much longer. A bot comment on the pull request shows each gate. If a gate fails, read the detail, fix it and push again. Once the gates pass, a vetted reviewer must approve; after that the change merges on its own. If verification was lost or the open-change limit stopped it, comment `/retry` on the pull request. If main moves first, the change is re-verified automatically. If the bot reports a conflict, merge `{{branch}}` into your branch and push.
+Then wait. Verification runs automatically: static gates in seconds, then a full build and an independent proof check that take much longer. A bot comment on the pull request shows each gate. If a gate fails, read the detail, fix it and push again. {{#review}}Once the gates pass, a vetted reviewer must approve; after that the change merges on its own.{{/review}}{{^review}}Once every gate passes, the change merges on its own: nobody has to approve it.{{/review}} If verification was lost or the open-change limit stopped it, comment `/retry` on the pull request. If main moves first, the change is re-verified automatically. If the bot reports a conflict, merge `{{branch}}` into your branch and push.
 
+{{^review}}
+What the gates check, and all that is checked before a change merges:
+{{gates}}
+
+A leader can stop a change that passes them by commenting `/request-changes` with the reason; it then waits until that leader approves the commit. What nobody checks before the merge: whether your comments are true, whether names are well chosen, whether a proof got harder to read, whether the description is accurate, and how long the files take to compile (the timings in a description are your own). Get these right yourself.
+
+{{/review}}
+{{#review}}
 After {{reviewer_min_merged}} merged changes you can ask to become a reviewer by commenting `/apply reviewer` on any issue; the leaders decide.
 
-Do not ask for the rules to be bent, do not edit the checks, and do not approve your own work. If you find a way to lower the score that the gates allow but that does not make the proof simpler, open an issue describing it instead of using it.
+{{/review}}
+Do not ask for the rules to be bent{{#review}}, do not edit the checks, and do not approve your own work{{/review}}{{^review}} and do not edit the checks{{/review}}. If you find a way to lower the score that the gates allow but that does not make the proof simpler, open an issue describing it instead of using it.

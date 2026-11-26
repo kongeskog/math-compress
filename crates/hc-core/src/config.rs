@@ -30,7 +30,10 @@ pub struct Config {
     pub conduct: Conduct,
 }
 
-/// Rules a reviewer checks, stated in the prompts. No gate enforces them.
+/// Rules of conduct, stated in the prompts. What can be counted in the text
+/// is enforced by the `conduct` gate (see `checks::conduct_problems`); the
+/// rest (compile time, the saving per place, whether a comment is true) is
+/// for the author and, where an arena uses review, the reviewer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Conduct {
@@ -39,6 +42,14 @@ pub struct Conduct {
     pub max_slowdown_pct: u32,
     pub search_tactics: SearchTactics,
     pub local_automation: LocalAutomation,
+    /// The number of `clear` tactics without a comment at the place (on the
+    /// same line or one of the two lines above; see `checks::automation`)
+    /// may not rise in a file.
+    pub comment_clear: bool,
+    /// The same for simp calls that switch a lemma off (`simp [-foo]`).
+    pub comment_disabled_lemmas: bool,
+    /// The number of `simp only []` calls may not rise in a file.
+    pub no_empty_simp_only: bool,
 }
 
 /// Whether a file may tune automation for its own proofs to save tokens:
@@ -49,7 +60,7 @@ pub struct Conduct {
 #[serde(default)]
 pub struct LocalAutomation {
     pub enabled: bool,
-    /// At most this many `attribute [local simp]` lines in one file.
+    /// At most this many `attribute [local simp]` commands in one file.
     pub max_local_simp_per_file: u32,
     /// A lemma is made a local simp lemma only if it is passed to `simp`
     /// at least this many times in the file.
@@ -68,6 +79,9 @@ impl Default for Conduct {
             max_slowdown_pct: 10,
             search_tactics: SearchTactics::default(),
             local_automation: LocalAutomation::default(),
+            comment_clear: true,
+            comment_disabled_lemmas: true,
+            no_empty_simp_only: true,
         }
     }
 }
@@ -124,12 +138,12 @@ impl Conduct {
         }
         if !st.enabled {
             return format!(
-                "Do not replace explicit steps by a tactic that searches for the proof ({}) to save tokens. Such a call already in the proof may stay.",
+                "Do not replace explicit steps by a tactic that searches for the proof ({}) to save tokens. Such a call already in the proof may stay. A gate checks it: the number of such calls may not rise in any file.",
                 self.tactic_list()
             );
         }
         format!(
-            "A tactic that searches for the proof ({}) may replace the end of a tactic block only if all of these hold: there are at most {} such calls in the file; the place saves at least {} tokens; the file takes at most {}% longer to compile; no specific tactic closes the goal at similar length; and a one-line comment at the place says what the removed lines used (where they were a chain of inequalities, the comment gives the intermediate bound and where the final constant comes from).",
+            "A tactic that searches for the proof ({}) may replace the end of a tactic block only if all of these hold: there are at most {} such calls in the file; the place saves at least {} tokens; the file takes at most {}% longer to compile; no specific tactic closes the goal at similar length; and a one-line comment at the place, on the same line or one of the two lines above, says what the removed lines used (where they were a chain of inequalities, the comment gives the intermediate bound and where the final constant comes from). A gate checks what can be counted: the number of calls in each file where it rose, and that the number of calls without a comment on their line or one of the two lines above does not rise in a file. The saving, the time and what the comment says are not checked by a machine.",
             self.tactic_list(),
             st.max_per_file,
             st.min_saving,
@@ -141,11 +155,33 @@ impl Conduct {
     pub fn local_rule(&self) -> String {
         let la = &self.local_automation;
         if !la.enabled {
-            return "Do not add `attribute [local simp]` (or other attributes that change what automation does) or hypotheses with a default proof to save tokens.".to_string();
+            return "Do not add `attribute [local simp]` (or other attributes that change what automation does) or hypotheses with a default proof to save tokens. A gate checks the attributes: the number of `attribute [local simp]` commands may not rise in any file, and neither may the number of global `attribute [simp]` commands, of lemmas erased from the simp set (`attribute [-simp]`) or of instance priorities.".to_string();
         }
         format!(
-            "A file may tune automation for its own proofs under these conditions. A lemma becomes `attribute [local simp]` only if it occurs at least {} times in `simp`/`simpa` lists (not `simp only`) of that file on the base branch; at most {} lemmas per file; the attribute sits in a `section` that ends where its use ends (or `attribute [local simp] … in` for one declaration), with a comment that says what the set is for and is true of its whole scope; a call that switches a local simp lemma off (`simp [-foo]`) says why in a comment. A hypothesis gets a default proof (`(h : p := by tac)`) only if most call sites on the base branch discharge it by that same tactic, and the lemma's doc comment says which hypothesis has a default. Never a global attribute, never a change to an instance priority or to the library's simp set, and the file may not compile slower than the limit above.",
+            "A file may tune automation for its own proofs under these conditions. A lemma becomes `attribute [local simp]` only if it occurs at least {} times in `simp`/`simpa` lists (not `simp only`) of that file on the base branch; at most {} `attribute [local simp]` commands per file; the attribute sits in a `section` or `namespace` that ends where its use ends (or is `attribute [local simp] … in` for one declaration), with a comment on the same line or one of the two lines above that says what the set is for and is true of its whole scope; a call that switches a local simp lemma off (`simp [-foo]`) says why in a comment. A hypothesis gets a default proof (`(h : p := by tac)`) only if most call sites on the base branch discharge it by that same tactic, and the lemma's doc comment says which hypothesis has a default. Never a global `attribute [simp]`, never an instance priority (`attribute [instance 100]`, `instance (priority := …)`), never a lemma erased from the simp set (`attribute [-simp]`), and the file may not compile slower than the limit above. A gate checks what can be counted: the number of `attribute [local simp]` commands in each file where it rose; that none is added without a comment, or outside a `section` or `namespace` block when it is not of the `… in` form; and that no global `attribute [simp]`, `attribute [-simp]` or instance priority is added. How often a lemma is used, default proofs and what the comments say are not checked by a machine.",
             la.min_uses, la.max_local_simp_per_file
+        )
+    }
+
+    /// The small rules the `conduct` gate also counts, as a sentence for
+    /// contributors. Empty if an arena switched them all off.
+    pub fn tidy_rule(&self) -> String {
+        let mut parts = Vec::new();
+        if self.comment_clear {
+            parts.push("a `clear` you add says in a comment, on the same line or one of the two lines above, why the hypotheses must go (usually: which later step they slow down; a `clear` directly before `induction`, `generalize` or `revert` needs none)");
+        }
+        if self.comment_disabled_lemmas {
+            parts.push("a simp call you add that switches a lemma off (`simp [-foo]`) says why in a comment at the same place");
+        }
+        if self.no_empty_simp_only {
+            parts.push("`simp only []` is not added (write the step it stands for)");
+        }
+        if parts.is_empty() {
+            return String::new();
+        }
+        format!(
+            "Also checked by a gate, by counting in each changed file: {}. In each case the count without a comment (for `simp only []`, the count) may not rise in a file.",
+            parts.join("; ")
         )
     }
 
@@ -313,11 +349,15 @@ impl Format {
 pub struct Limits {
     /// Open pull requests one author may have being verified at once. Leaders are exempt.
     pub max_open_prs: usize,
+    /// How many characters of comments and string literals one change may
+    /// add, net, over all its files. Neither counts toward the score, so
+    /// without a limit a change could carry any amount of text. 0: no limit.
+    pub max_added_comment_chars: u64,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Limits { max_open_prs: 4 }
+        Limits { max_open_prs: 4, max_added_comment_chars: 5000 }
     }
 }
 
@@ -395,18 +435,43 @@ pub struct Guard {
     pub max_increase_pct: f64,
 }
 
+/// Whether a change needs the approval of someone other than its author
+/// before it merges. With both numbers 0 (the default) no approval is
+/// needed. Whatever the numbers, a `/request-changes` from a leader or a
+/// vetted reviewer blocks a change until the same person approves it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Review {
+    /// Approvals a change needs. 0: none.
     pub required: u32,
     /// Changes touching more files than this need `required_large` approvals.
     pub large_change_files: usize,
+    /// Approvals a large change needs. May be above 0 while `required` is 0:
+    /// then only large changes are reviewed.
     pub required_large: u32,
 }
 
 impl Default for Review {
+    /// No approval is needed: a change whose gates all pass merges. An arena
+    /// that wants every change read by a second party sets `required`.
     fn default() -> Self {
-        Review { required: 1, large_change_files: 20, required_large: 2 }
+        Review { required: 0, large_change_files: 20, required_large: 0 }
+    }
+}
+
+impl Review {
+    /// Whether this arena uses review at all: some change needs an approval.
+    pub fn on(&self) -> bool {
+        self.required > 0 || self.required_large > 0
+    }
+
+    /// Approvals a change of this many files needs before it merges.
+    pub fn needed(&self, changed_files: usize) -> u32 {
+        if changed_files > self.large_change_files {
+            self.required_large
+        } else {
+            self.required
+        }
     }
 }
 
@@ -546,6 +611,13 @@ mod tests {
         let mut c = Conduct::default();
         assert!(c.time_rule("main").contains("10%"));
         assert!(c.search_rule().starts_with("Do not replace"));
+        assert!(c.tidy_rule().contains("`clear`") && c.tidy_rule().contains("`simp only []`"));
+        let off = Conduct { comment_clear: false, comment_disabled_lemmas: false, no_empty_simp_only: false, ..c.clone() };
+        assert!(off.tidy_rule().is_empty());
+        let r = Review::default();
+        assert!(!r.on() && r.needed(1) == 0 && r.needed(100) == 0);
+        let large: Review = toml::from_str("required_large = 2").unwrap();
+        assert!(large.on() && large.needed(20) == 0 && large.needed(21) == 2);
         assert!(c.reviewer_bullets().contains("Explicit steps replaced"));
         c.search_tactics.enabled = true;
         assert!(c.search_rule().contains("at most 10 such calls"));

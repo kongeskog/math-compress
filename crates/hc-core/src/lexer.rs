@@ -38,11 +38,29 @@ fn is_ascii_op(c: char) -> bool {
     c.is_ascii_punctuation() && !is_single(c) && c != '"' && c != '_'
 }
 
+/// A comment as it stands in the source, delimiters included: a `--` line
+/// comment (without its line break) or a `/- ... -/` block, doc comments
+/// and module docs among them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Comment {
+    pub text: String,
+    /// 1-based line on which the comment starts.
+    pub line: usize,
+}
+
 /// Tokenize `src`, dropping comments and whitespace.
 pub fn tokenize(src: &str) -> Vec<Token> {
+    scan(src).0
+}
+
+/// The tokens of `src` and, separately, its comments. The tokens are exactly
+/// those of [`tokenize`]; the comments are for checks that read what the
+/// score does not count.
+pub fn scan(src: &str) -> (Vec<Token>, Vec<Comment>) {
     let chars: Vec<char> = src.chars().collect();
     let n = chars.len();
     let mut out = Vec::new();
+    let mut comments = Vec::new();
     let mut i = 0;
     let mut line = 1;
 
@@ -59,13 +77,16 @@ pub fn tokenize(src: &str) -> Vec<Token> {
         }
         // Line comment.
         if c == '-' && i + 1 < n && chars[i + 1] == '-' {
+            let start = i;
             while i < n && chars[i] != '\n' {
                 i += 1;
             }
+            comments.push(Comment { text: chars[start..i].iter().collect(), line });
             continue;
         }
         // Block comment, nested.
         if c == '/' && i + 1 < n && chars[i + 1] == '-' {
+            let (start, start_line) = (i, line);
             let mut depth = 1;
             i += 2;
             while i < n && depth > 0 {
@@ -82,6 +103,7 @@ pub fn tokenize(src: &str) -> Vec<Token> {
                     i += 1;
                 }
             }
+            comments.push(Comment { text: chars[start..i].iter().collect(), line: start_line });
             continue;
         }
         let start = i;
@@ -149,7 +171,7 @@ pub fn tokenize(src: &str) -> Vec<Token> {
         }
         out.push(Token { text: chars[start..i].iter().collect(), line: start_line });
     }
-    out
+    (out, comments)
 }
 
 /// If a character literal starts at `i`, return the index just past it.
@@ -219,6 +241,15 @@ mod tests {
         assert_eq!(texts("a -- b c\nd"), ["a", "d"]);
         assert_eq!(texts("a /- x /- nested -/ y -/ b"), ["a", "b"]);
         assert_eq!(texts("/-- doc -/\ntheorem t : True := trivial"), ["theorem", "t", ":", "True", ":=", "trivial"]);
+    }
+
+    #[test]
+    fn comments_are_returned_beside_the_tokens() {
+        let src = "a -- b c\n/-- doc\n  more -/ d \"x -- y\"\n/- open";
+        let (tokens, comments) = scan(src);
+        assert_eq!(tokens, tokenize(src));
+        let got: Vec<(usize, &str)> = comments.iter().map(|c| (c.line, c.text.as_str())).collect();
+        assert_eq!(got, [(1, "-- b c"), (2, "/-- doc\n  more -/"), (4, "/- open")]);
     }
 
     #[test]

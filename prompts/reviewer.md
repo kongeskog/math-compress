@@ -20,9 +20,8 @@ Read the full diff with `gh pr diff <n> -R {{repo}}` and the bot's gate comment.
 - Noise traded for tokens: anything that makes the build print warnings it did not print before, such as removing an option that silences a linter without fixing what the linter reports. (Fixing the reports and then removing the option is a genuine cleanup.)
 - A trick that lowers the number without simplifying the proof. If the gates allowed it, also open an issue so the rule can be fixed.
 
-Then check what authors most often get wrong. None of these is caught by a machine, and each is cheap to fix:
+Then check what authors most often get wrong. None of these is caught by a machine (a gate does check that no comment still names a declaration the change deleted, that no added line is too long, and what the rules on automation let it count), and each is cheap to fix:
 
-- A declaration the change deleted is still named in a comment, a doc comment or a module doc, anywhere in `{{dir}}/`.
 - A comment or doc comment at a changed place describes the proof or the statement as it was before, or names a hypothesis that is not in scope there. Compare each new comment with the lines it replaced.
 - A hypothesis kept a name that described the old statement.
 - A statement changed and its doc comment did not.
@@ -54,4 +53,4 @@ A normal GitHub review (approve or request changes) counts the same way.
 
 An approval counts only if you give it after the bot's first comment on that commit: the comment says what the commit is judged against (main, or another pull request at a named commit), and that is what you approve. If you approved earlier, for example while the pull request was a draft, or before a pull request it is built on was pushed to, the bot tells you so on the pull request; look at what its comment now says and give the approval again if it still holds. Post your verdict as a new comment and do not edit it afterwards: an `/approve` comment that was edited does not count, and the bot will ask you to post it again. A `/approve` comment is counted within a minute or two of posting; a GitHub review within ten.
 
-Give concrete reasons with file names. One approval from an account other than the author's merges a change (large changes need {{review_large}}), so approve only what you have actually read. Never approve your own change or one made on your behalf. An approval applies to the exact commit you reviewed; if the author pushes again, it must be reviewed again.
+Give concrete reasons with file names. {{approvals_needed}}, so approve only what you have actually read. Never approve your own change or one made on your behalf. An approval applies to the exact commit you reviewed; if the author pushes again, it must be reviewed again.

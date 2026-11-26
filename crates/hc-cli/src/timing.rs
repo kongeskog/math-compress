@@ -400,7 +400,7 @@ pub fn run(head: &Path, c: &Compared, o: &Options) -> Result<()> {
         if !quiet {
             let over = results.iter().filter(|t| t.over()).count();
             println!(
-                "\n{} of {} file(s) over the limit. Timings are noisy: being over is reported, not enforced; a reviewer judges.",
+                "\n{} of {} file(s) over the limit. Timings are noisy: being over is reported, not enforced by any gate.",
                 over,
                 results.len()
             );

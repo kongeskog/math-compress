@@ -93,7 +93,8 @@ pub enum OnFail {
     Fix,
     /// A verdict on the commit: the attempt is recorded as rejected.
     Reject,
-    /// Not a failure of the change: it waits (for main, or for a reviewer).
+    /// Not a failure of the change: it waits (for main, or for a reviewer
+    /// where the arena uses review, or for whoever requested changes).
     Wait,
 }
 
@@ -106,12 +107,25 @@ pub const GATES: &[(&str, &str, &str, OnFail)] = &[
     ("scope", "Changes stay in scope", "Only files inside the project directory may change.", OnFail::Reject),
     ("deny", "No banned constructs", "No new axioms, no unchecked native evaluation, no escape hatches, no code that runs during the build, and no protected declaration removed.", OnFail::Reject),
     ("no_increase", "No more long lines or exceptions", "The number of lines over the length limit, and of constructs the project tolerates but wants no more of (private macro languages, raised resource limits), may not grow.", OnFail::Fix),
+    ("added_lines", "Added lines are clean", "No line the change adds is over the length limit or ends in whitespace. A line is added if its file has more lines with exactly that text than before, so a line that only moved is not.", OnFail::Fix),
+    ("deleted_names", "No deleted name still mentioned", "A declaration the change deletes is not named in any comment or doc comment afterwards. (Code that still names it does not compile, which the build decides.)", OnFail::Fix),
+    ("conduct", "Automation within the stated limits", "What the rules of conduct say about automation and can be counted in the text: calls of search tactics, local simp attributes and their scope and comment, global attributes and instance priorities, and comments on added `clear` tactics and switched-off simp lemmas. Each count is compared with the same count in the same file before the change.", OnFail::Fix),
+    ("comments", "Added comments within limits", "Comments and string literals do not count toward the score, so their growth in one change is limited, and no added comment or string may contain a link.", OnFail::Fix),
     ("improves", "Score improves", "The primary metric must drop by at least the minimum step and no guard metric may rise beyond its tolerance.", OnFail::Fix),
     ("compiles", "Project compiles", "The full project builds on the pinned toolchain with no unfinished proofs.", OnFail::Reject),
     ("same_theorems", "Same theorems proved", "An independent checker with a second proof kernel confirms the original theorem statements are still proved from the standard axioms only.", OnFail::Reject),
     ("fresh", "Verified on current main", "The verification ran on top of the latest main branch.", OnFail::Wait),
-    ("review", "Independent review", "Approved by a vetted reviewer other than the author.", OnFail::Wait),
+    ("review", "Independent review", "Approved by a vetted reviewer other than the author, where the arena requires an approval. In every arena a request for changes by a leader or a vetted reviewer blocks the change until the same person approves it.", OnFail::Wait),
 ];
+
+/// The static gates a result must carry since version 2 of the static rules.
+pub const STATIC_GATES_2: &[&str] = &["added_lines", "deleted_names", "conduct", "comments"];
+
+/// The version of the static rules `hc eval` judges by, recorded in every
+/// result it writes. The gatekeeper does not use a result made under older
+/// rules: the change is verified again, so that nothing merges without the
+/// gates that were added since.
+pub const STATIC_RULES: u32 = 2;
 
 pub fn gate_label(key: &str) -> &'static str {
     GATES.iter().find(|g| g.0 == key).map(|g| g.1).unwrap_or("Gate")
@@ -160,6 +174,10 @@ pub struct VerifyResult {
     /// presence also marks a result in the current format.
     #[serde(default)]
     pub min_delta: Option<u64>,
+    /// The version of the static rules the result was judged by
+    /// ([`STATIC_RULES`]); 0 in results from before it was recorded.
+    #[serde(default)]
+    pub rules: u32,
     pub metrics: Metrics,
     pub base_metrics: Metrics,
     pub gates: Vec<Gate>,
@@ -180,7 +198,16 @@ impl VerifyResult {
 #[serde(rename_all = "snake_case")]
 pub enum AttemptStatus {
     Verifying,
+    /// Every automatic gate passed and an approval the arena requires is missing.
     AwaitingReview,
+    /// Every automatic gate passed and the arena requires no approval for
+    /// this change, but a leader or a vetted reviewer requested changes: it
+    /// waits until the same person approves the commit.
+    ChangesRequested,
+    /// Every gate passed, in an arena that requires no approval for this
+    /// change, and it has not merged in this pass: merging is paused, or the
+    /// merge itself failed and is tried again.
+    Ready,
     Stale,
     Conflict,
     /// A gate failed that the author can fix with a push or an edit. The
