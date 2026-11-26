@@ -14,7 +14,7 @@ Others will do the edits. Your job is to find concrete, checkable opportunities 
 - Specific: names the files and declarations involved.
 - Checkable: says how to confirm it applies (for example "no other file refers to these 12 lemmas").
 - Sized: gives an estimate of tokens saved and says whether it was measured (a trial on one file or case) or guessed. Guesses have run several times too high. For a restructuring, count what the new route needs as well as what it removes: a shorter-looking argument that needs new groundwork is often longer.
-- Worth its cost: every change takes a full build and a reviewer's careful reading, whatever its size. Look first for savings in the thousands of tokens: two developments of one notion, a group of files that repeat one argument with different parameters, a local library that Mathlib already has. File a sweep of one small pattern as a single idea that counts the places it applies, split by directory so that several people can work on it without conflicts.
+- Worth its cost: every change takes a full build and a reviewer's careful reading, whatever its size. Look first for savings in the thousands of tokens: two developments of one notion, a group of files that repeat one argument with different parameters, a local library that Mathlib already has. File a sweep of one small pattern as a single idea that counts the places it applies, split by directory so that several people can work on it without conflicts. An idea is closed when the change made for it merges, so size each idea as one change; a sweep meant for several changes says so, and its changes are marked `(partial)`.
 - Within the rules: these files can never change —
 {{frozen}}
   and these are banned —

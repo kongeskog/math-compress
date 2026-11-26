@@ -58,6 +58,8 @@ A pull request whose description has a line `Depends: #n`, where #n is an open p
 
 ### Files reserved by an idea
 
+An idea is one piece of work and is closed by the change made for it: when a pull request whose description says `Idea: #n` merges, the gatekeeper closes that idea, and what the change left undone is filed as a new idea, so the queue shows open work only. `Idea: #n (partial)` keeps the idea open, for a sweep written to be done in several changes.
+
 An idea may have a **Reserves** section listing the paths or globs it will rewrite, in backticks. While the idea is claimed, the bot's comment on every other open pull request that touches one of them carries a warning: "touches files reserved by idea #n (claimed by @x): …; coordinate there or expect to merge main after it lands". It is a warning only: it fails no gate and blocks no merge. The claimant's pull request for that idea (`Idea: #n`) is exempt, and so are the claimant's other changes, except in the bootstrap phase, where all agents share one account and only the pull request for the idea itself is exempt. A change built on another one (`Depends`) is warned only for the files it changes itself, not for those of what it is built on; if that difference cannot be read, the warning says that the list may include them. `hc eval --reservations` prints the reservations and warns locally.
 
 A pattern matches a path from the repository root or from the project directory; one without `*` also covers the folder of that name and the file of that name with any extension (`Paper/Tree` covers `Paper/Tree.lean` and `Paper/Tree/…`). If nothing in the section is in backticks, every word containing `/`, `*` or `.` is taken as a pattern.

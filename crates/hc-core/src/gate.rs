@@ -206,12 +206,13 @@ pub fn idea_ref(body: &str) -> Option<u64> {
     c.get(1).or(c.get(2))?.as_str().parse().ok()
 }
 
-/// Whether the pull request says it finishes its idea: `Idea: #12 (complete)`
-/// (or `Closes #12`). A plain `Idea: #12` is one part of the idea.
+/// Whether merging the pull request closes its idea. It does unless the line
+/// says the change is only a part: `Idea: #12 (partial)` (or `(part)`). An
+/// idea is meant to be closed by the change made for it; what a change
+/// leaves undone is filed as a new idea, so the queue shows open work only.
 pub fn idea_complete(body: &str) -> bool {
-    Regex::new(r"(?im)^\s*idea:\s*#\d+\s*\(?\s*completes?\b|\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#\d+")
-        .expect("static regex")
-        .is_match(body)
+    idea_ref(body).is_some()
+        && !Regex::new(r"(?im)^\s*idea:\s*#\d+\s*\(?\s*part(?:ial|ly)?\b").expect("static regex").is_match(body)
 }
 
 fn names_an_idea(body: &str) -> bool {
@@ -237,7 +238,7 @@ pub fn format_check(
     }
     if !names_an_idea(body) {
         problems.push(
-            "The description must contain a line `Idea: #<number>` (one part of that idea), `Idea: #<number> (complete)` (this finishes it) or `Idea: none`"
+            "The description must contain a line `Idea: #<number>` (the idea is closed when this merges), `Idea: #<number> (partial)` (it stays open) or `Idea: none`"
                 .to_string(),
         );
     }
@@ -1346,22 +1347,22 @@ impl<'a, F: Forge> Gatekeeper<'a, F> {
                     out.log.push(format!("#{}: merged ({delta})", pr.number));
                     if let Some(idea) = attempt.idea {
                         if idea_complete(&pr.body) {
-                            // The author says this finishes the idea.
+                            // A change made for an idea closes it, unless it says it is a part.
                             let _ = self.forge.comment(
                                 idea,
                                 &format!(
-                                    "#{} merged and completes this idea ({delta} {}). Closing; reopen it if something is left.",
+                                    "#{} merged for this idea ({delta} {}). Closing; what is left, if anything, is filed as a new idea.",
                                     pr.number, self.cfg.score.primary
                                 ),
                             );
                             let _ = self.forge.close_issue(idea);
                             out.log.push(format!("idea #{idea}: closed, completed by #{}", pr.number));
                         } else {
-                            // An idea can take several changes, so a part does not close it.
+                            // The author says this is one part of the idea.
                             let _ = self.forge.comment(
                                 idea,
                                 &format!(
-                                    "#{} merged for one part of this idea ({delta} {}). It stays open for the rest; the change that finishes it says `Idea: #{idea} (complete)`, or an ideator or leader closes it.",
+                                    "#{} merged for one part of this idea ({delta} {}) and says so (`(partial)`), so it stays open for the rest. A leader or ideator closes it when the rest is done or not worth doing.",
                                     pr.number, self.cfg.score.primary
                                 ),
                             );
@@ -3627,26 +3628,29 @@ mod tests {
 
     #[test]
     fn a_change_that_completes_its_idea_closes_it() {
+        assert!(idea_complete("Idea: #7"));
         assert!(idea_complete("Idea: #7 (complete)"));
         assert!(idea_complete("text\n\nidea: #7 complete\n"));
         assert!(idea_complete("Closes #7"));
-        assert!(!idea_complete("Idea: #7"));
+        assert!(!idea_complete("Idea: #7 (partial)"));
         assert!(!idea_complete("Idea: #7 (part)"));
-        assert!(!idea_complete("The proof is complete.\n\nIdea: #7"));
+        assert!(!idea_complete("idea: #7 partial"));
+        assert!(!idea_complete("Idea: none"));
+        assert!(idea_complete("Only a partial cleanup of the file.\n\nIdea: #7"));
         assert_eq!(idea_ref("Idea: #7 (complete)"), Some(7));
 
         let mut m = green();
         m.issues.push(idea(7, "eve", &["idea"]));
-        m.prs[0].body = "Shorter proof.\n\nIdea: #7 (complete)".into();
+        m.prs[0].body = "Shorter proof.\n\nIdea: #7".into();
         m.reviews.insert(1, vec![approve("bob", &head(1))]);
         run(&mut m, &mut Ledger::default(), &[]);
         assert_eq!(m.closed, [7]);
-        assert!(m.posted.iter().any(|(n, body)| *n == 7 && body.contains("completes this idea")));
+        assert!(m.posted.iter().any(|(n, body)| *n == 7 && body.contains("merged for this idea")));
 
-        // A part leaves the idea open.
+        // A change that says it is a part leaves the idea open.
         let mut m = green();
         m.issues.push(idea(7, "eve", &["idea"]));
-        m.prs[0].body = "Shorter proof.\n\nIdea: #7".into();
+        m.prs[0].body = "Shorter proof.\n\nIdea: #7 (partial)".into();
         m.reviews.insert(1, vec![approve("bob", &head(1))]);
         run(&mut m, &mut Ledger::default(), &[]);
         assert!(m.closed.is_empty());

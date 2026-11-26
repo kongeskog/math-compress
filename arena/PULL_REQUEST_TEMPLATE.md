@@ -13,10 +13,10 @@
 <!-- Paste the output of `hc eval` run from the repository root
      (for a change built on another one: `hc eval --depends-ref <that branch>`). -->
 
-<!-- Keep exactly one of these lines. "(complete)" closes the idea when this merges;
-     leave it out when the change does only part of the idea. -->
+<!-- Keep exactly one of these lines. The idea is closed when this merges; say in the
+     description what is left, if anything, so it can be filed as a new idea. Write
+     "Idea: #<n> (partial)" only for a sweep meant to take several changes: it stays open. -->
 Idea: #
-Idea: # (complete)
 Idea: none
 
 <!-- Only if this branch is built on another open pull request of this repository (it contains

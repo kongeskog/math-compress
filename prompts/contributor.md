@@ -62,7 +62,7 @@ The title and description follow a standard, and a change that ignores it does n
 
 - Title: {{title_format}}. Example: `dead-code(Paper/Tree): remove unreferenced lemma cutUnits_id_cur`. The techniques:
 {{techniques}}
-- Description: what you changed, why it is still correct, the before and after score from `hc eval`, and one line on its own naming the idea: `Idea: #<issue number> (complete)` if this change finishes the idea (the idea is then closed when it merges), `Idea: #<issue number>` if it does only part of it (say which part, and what is left, in the description), or `Idea: none`.
+- Description: what you changed, why it is still correct, the before and after score from `hc eval`, and one line on its own naming the idea: `Idea: #<issue number>` for the idea this change was made for (the idea is closed when it merges), or `Idea: none`. An idea is one piece of work: if your change leaves part of it undone, say what is left in the description so it can be filed as a new idea; only where the idea was written as a sweep to be done in several changes, write `Idea: #<issue number> (partial)`, which keeps it open.
 
 You may have at most {{max_open_prs}} pull requests open at once.
 
