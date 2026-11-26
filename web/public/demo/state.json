@@ -46,10 +46,10 @@
       }
     ]
   },
-  "updated_at": "2026-11-24T00:29:07.611Z",
+  "updated_at": "2026-11-26T07:06:02.158Z",
   "baseline": {
     "sha": "765c37a769f54cf20bd0ed69a0f25873c7089dfe",
-    "at": "2026-11-19T00:29:07.611Z",
+    "at": "2026-11-21T07:06:02.158Z",
     "metrics": {
       "tokens": 928161,
       "loc": 58797,
@@ -61,7 +61,7 @@
   },
   "current": {
     "sha": "27647689a6408bb23a4788a164fdaff4f2bab74a",
-    "at": "2026-11-23T10:54:03.408Z",
+    "at": "2026-11-25T17:30:57.955Z",
     "metrics": {
       "tokens": 887820,
       "loc": 55797,
@@ -152,7 +152,7 @@
       "lease_expires": null,
       "pr": 13,
       "result_delta": -1290,
-      "created_at": "2026-11-21T07:58:33.333Z",
+      "created_at": "2026-11-23T14:35:27.880Z",
       "url": "https://github.com/kongeskog/formal-math/issues/100"
     },
     {
@@ -166,7 +166,7 @@
       "lease_expires": null,
       "pr": 54,
       "result_delta": -964,
-      "created_at": "2026-11-21T18:12:23.023Z",
+      "created_at": "2026-11-24T00:49:17.570Z",
       "url": "https://github.com/kongeskog/formal-math/issues/101"
     },
     {
@@ -177,10 +177,10 @@
       "status": "claimed",
       "author": "pnkfelix2",
       "claimed_by": "mira-k",
-      "lease_expires": "2026-11-24T02:04:07.611Z",
+      "lease_expires": "2026-11-26T08:41:02.158Z",
       "pr": 61,
       "result_delta": null,
-      "created_at": "2026-11-20T00:04:58.379Z",
+      "created_at": "2026-11-22T06:41:52.926Z",
       "url": "https://github.com/kongeskog/formal-math/issues/102"
     },
     {
@@ -191,10 +191,10 @@
       "status": "claimed",
       "author": "pnkfelix2",
       "claimed_by": "okabe-r",
-      "lease_expires": "2026-11-24T00:51:07.611Z",
+      "lease_expires": "2026-11-26T07:28:02.158Z",
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-20T15:33:31.966Z",
+      "created_at": "2026-11-22T22:10:26.513Z",
       "url": "https://github.com/kongeskog/formal-math/issues/103"
     },
     {
@@ -208,7 +208,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-19T18:19:01.577Z",
+      "created_at": "2026-11-22T00:55:56.124Z",
       "url": "https://github.com/kongeskog/formal-math/issues/104"
     },
     {
@@ -222,7 +222,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-21T08:36:12.166Z",
+      "created_at": "2026-11-23T15:13:06.713Z",
       "url": "https://github.com/kongeskog/formal-math/issues/105"
     },
     {
@@ -236,7 +236,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-20T19:27:19.187Z",
+      "created_at": "2026-11-23T02:04:13.734Z",
       "url": "https://github.com/kongeskog/formal-math/issues/106"
     },
     {
@@ -250,7 +250,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-19T15:50:45.421Z",
+      "created_at": "2026-11-21T22:27:39.968Z",
       "url": "https://github.com/kongeskog/formal-math/issues/107"
     },
     {
@@ -264,7 +264,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-22T03:07:31.166Z",
+      "created_at": "2026-11-24T09:44:25.713Z",
       "url": "https://github.com/kongeskog/formal-math/issues/108"
     },
     {
@@ -278,7 +278,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-20T05:02:17.983Z",
+      "created_at": "2026-11-22T11:39:12.530Z",
       "url": "https://github.com/kongeskog/formal-math/issues/109"
     },
     {
@@ -292,7 +292,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-19T09:46:19.011Z",
+      "created_at": "2026-11-21T16:23:13.558Z",
       "url": "https://github.com/kongeskog/formal-math/issues/110"
     },
     {
@@ -306,7 +306,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-21T18:11:34.171Z",
+      "created_at": "2026-11-24T00:48:28.718Z",
       "url": "https://github.com/kongeskog/formal-math/issues/111"
     },
     {
@@ -320,7 +320,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-21T14:55:26.393Z",
+      "created_at": "2026-11-23T21:32:20.940Z",
       "url": "https://github.com/kongeskog/formal-math/issues/112"
     },
     {
@@ -334,7 +334,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-19T15:25:45.299Z",
+      "created_at": "2026-11-21T22:02:39.846Z",
       "url": "https://github.com/kongeskog/formal-math/issues/113"
     }
   ],
@@ -347,8 +347,8 @@
       "author": "mira-k",
       "head_sha": "b1a3996cc8e98075c8dc59ee4980a0f42f501776",
       "base_sha": "27647689a6408bb23a4788a164fdaff4f2bab74a",
-      "status": "awaiting_review",
-      "created_at": "2026-11-23T22:45:07.611Z",
+      "status": "needs_fix",
+      "created_at": "2026-11-26T05:22:02.158Z",
       "decided_at": null,
       "metrics": {
         "tokens": 887078,
@@ -389,36 +389,51 @@
           "status": "pass"
         },
         {
+          "key": "added_lines",
+          "label": "Added lines are clean",
+          "status": "fail"
+        },
+        {
+          "key": "deleted_names",
+          "label": "No deleted name still mentioned",
+          "status": "skip"
+        },
+        {
+          "key": "conduct",
+          "label": "Automation within the stated limits",
+          "status": "skip"
+        },
+        {
+          "key": "comments",
+          "label": "Added comments within limits",
+          "status": "skip"
+        },
+        {
           "key": "build",
           "label": "Compiles without sorry",
-          "status": "pass"
+          "status": "skip"
         },
         {
           "key": "comparator",
           "label": "Same theorems, same axioms",
-          "status": "pass"
+          "status": "skip"
         },
         {
           "key": "improves",
           "label": "Score improves, guards hold",
-          "status": "pass"
+          "status": "skip"
         },
         {
           "key": "fresh",
           "label": "Verified on current main",
-          "status": "pass"
-        },
-        {
-          "key": "review",
-          "label": "Independent review",
-          "status": "pending"
+          "status": "skip"
         }
       ],
       "idea": 102,
       "url": "https://github.com/kongeskog/formal-math/pull/61",
       "run_url": "https://github.com/kongeskog/formal-math/actions/runs/9008357",
       "merge_sha": null,
-      "reason": null
+      "reason": "Added lines are clean: 1 added line(s) longer than 100 characters: vp-vnp/Paper/Tree.lean:412 (104)"
     },
     {
       "pr": 62,
@@ -429,7 +444,7 @@
       "head_sha": "ccd42db4587941c5041f110ce4f04b369f9a0ff1",
       "base_sha": "27647689a6408bb23a4788a164fdaff4f2bab74a",
       "status": "verifying",
-      "created_at": "2026-11-23T23:11:07.611Z",
+      "created_at": "2026-11-26T05:48:02.158Z",
       "decided_at": null,
       "metrics": {
         "tokens": 887502,
@@ -470,6 +485,26 @@
           "status": "pass"
         },
         {
+          "key": "added_lines",
+          "label": "Added lines are clean",
+          "status": "pass"
+        },
+        {
+          "key": "deleted_names",
+          "label": "No deleted name still mentioned",
+          "status": "pass"
+        },
+        {
+          "key": "conduct",
+          "label": "Automation within the stated limits",
+          "status": "pass"
+        },
+        {
+          "key": "comments",
+          "label": "Added comments within limits",
+          "status": "pass"
+        },
+        {
           "key": "build",
           "label": "Compiles without sorry",
           "status": "pending"
@@ -488,11 +523,6 @@
           "key": "fresh",
           "label": "Verified on current main",
           "status": "pending"
-        },
-        {
-          "key": "review",
-          "label": "Independent review",
-          "status": "pending"
         }
       ],
       "idea": null,
@@ -510,7 +540,7 @@
       "head_sha": "a3e18b184ef5bc54c5e49c5e218523e6eb5a58ec",
       "base_sha": "27647689a6408bb23a4788a164fdaff4f2bab74a",
       "status": "stale",
-      "created_at": "2026-11-23T23:37:07.611Z",
+      "created_at": "2026-11-26T06:14:02.158Z",
       "decided_at": null,
       "metrics": {
         "tokens": 886530,
@@ -551,6 +581,26 @@
           "status": "pass"
         },
         {
+          "key": "added_lines",
+          "label": "Added lines are clean",
+          "status": "pass"
+        },
+        {
+          "key": "deleted_names",
+          "label": "No deleted name still mentioned",
+          "status": "pass"
+        },
+        {
+          "key": "conduct",
+          "label": "Automation within the stated limits",
+          "status": "pass"
+        },
+        {
+          "key": "comments",
+          "label": "Added comments within limits",
+          "status": "pass"
+        },
+        {
           "key": "build",
           "label": "Compiles without sorry",
           "status": "pass"
@@ -569,11 +619,6 @@
           "key": "fresh",
           "label": "Verified on current main",
           "status": "pending"
-        },
-        {
-          "key": "review",
-          "label": "Independent review",
-          "status": "pending"
         }
       ],
       "idea": null,
@@ -591,7 +636,7 @@
       "head_sha": "74f52037053888a745cc69621e0a4b1d3e44d930",
       "base_sha": "27647689a6408bb23a4788a164fdaff4f2bab74a",
       "status": "verifying",
-      "created_at": "2026-11-24T00:03:07.611Z",
+      "created_at": "2026-11-26T06:40:02.158Z",
       "decided_at": null,
       "metrics": null,
       "base_metrics": null,

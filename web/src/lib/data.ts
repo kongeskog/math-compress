@@ -167,6 +167,13 @@ export const store = createRoot(() => {
   /** True while the leaders run every agent themselves. */
   const bootstrap = () => roles()?.bootstrap ?? rules()?.roles?.bootstrap ?? false;
 
+  /**
+   * Whether the arena requires an approval for some change. It comes from the
+   * arena's configuration through rules.json; rules from before the setting
+   * existed have no such field, and review was required then.
+   */
+  const reviewOn = () => rules()?.review?.on ?? true;
+
   const repoUrl = () => (config() ? `https://github.com/${config()!.repo}` : "#");
 
   return {
@@ -180,6 +187,7 @@ export const store = createRoot(() => {
     roles,
     ops,
     bootstrap,
+    reviewOn,
     prompts,
     fetchedAt,
     error,

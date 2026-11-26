@@ -8,6 +8,8 @@ const ATTEMPT: Record<AttemptStatus, { label: string; variant: "good" | "warn" |
   rejected: { label: "Rejected", variant: "neutral" },
   verifying: { label: "Verifying", variant: "warn" },
   awaiting_review: { label: "Awaiting review", variant: "warn" },
+  changes_requested: { label: "Changes requested", variant: "warn" },
+  ready: { label: "Ready to merge", variant: "good" },
   stale: { label: "Re-verifying", variant: "warn" },
   conflict: { label: "Conflict", variant: "bad" },
   needs_fix: { label: "Needs a fix", variant: "warn" },

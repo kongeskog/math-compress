@@ -12,6 +12,10 @@ export type Gate = { key: string; label: string; status: GateStatus; detail?: st
 export type AttemptStatus =
   | "verifying"
   | "awaiting_review"
+  /** gates passed, no approval needed, and a leader or reviewer requested changes */
+  | "changes_requested"
+  /** gates passed, no approval needed; waits only for merging to go on */
+  | "ready"
   | "stale"
   | "conflict"
   /** a gate failed that the author can fix; open only, never in the attempts log */
@@ -110,8 +114,12 @@ export type State = {
   top_files: { path: string; tokens: number; loc: number }[];
 };
 export type Config = { repo: string; dataUrl: string; harnessRepo: string };
+/** The arena's review setting. `on`: some change needs an approval before it merges. */
+export type ReviewRules = { on: boolean; required: number; required_large: number; large_change_files: number };
 export type Rules = {
   gates: { key: string; label: string; description: string }[];
+  /** Absent in rules written before review became optional; review was required then. */
+  review?: ReviewRules;
   metrics: MetricDef[];
   frozen: string[];
   deny: { name: string; mode: string; description: string }[];

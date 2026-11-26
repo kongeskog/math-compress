@@ -49,18 +49,22 @@ const rejectReasons = [
   ["improves", "Guard regressed: build time 1.6× baseline"],
   ["comparator", "Comparator rejected the solution"],
   ["deny", "Line longer than 100 characters"],
-  ["review", "Changes requested: proof obfuscated to save tokens"],
+  ["scope", "Files outside the project changed: README.md"],
 ];
+// The arena of the demo requires no approval, so there is no review gate.
 const GATES = [
   ["format", "Standard title and description"],
   ["frozen", "Frozen files unchanged"],
   ["scope", "Changes stay inside the project"],
   ["deny", "No banned constructs"],
+  ["added_lines", "Added lines are clean"],
+  ["deleted_names", "No deleted name still mentioned"],
+  ["conduct", "Automation within the stated limits"],
+  ["comments", "Added comments within limits"],
   ["build", "Compiles without sorry"],
   ["comparator", "Same theorems, same axioms"],
   ["improves", "Score improves, guards hold"],
   ["fresh", "Verified on current main"],
-  ["review", "Independent review"],
 ];
 const gates = (failKey, pendingFrom) => {
   let failed = false;
@@ -194,9 +198,9 @@ for (let k = 0; k < N; k++) {
     const [key, reason] = pick(rejectReasons);
     a.reason = reason;
     a.gates = gates(key);
-    const staticFail = key === "frozen" || key === "deny";
+    const staticFail = key === "frozen" || key === "deny" || key === "scope";
     if (!staticFail && key !== "build") {
-      const d = key === "review" ? -int(200, 1500) : int(-20, 600);
+      const d = int(-20, 600);
       a.metrics = {
         tokens: base.tokens + d,
         loc: base.loc + Math.round(d / 14),
@@ -217,7 +221,7 @@ for (let k = 0; k < N; k++) {
 
 const open = [];
 const openSpecs = [
-  { status: "awaiting_review", pendingFrom: "review", saved: 742 },
+  { status: "needs_fix", failKey: "added_lines", saved: 742, reason: "Added lines are clean: 1 added line(s) longer than 100 characters: vp-vnp/Paper/Tree.lean:412 (104)" },
   { status: "verifying", pendingFrom: "build", saved: 318 },
   { status: "stale", pendingFrom: "fresh", saved: 1290, reason: "Main moved; branch updated and verification re-running" },
   { status: "verifying", pendingFrom: "frozen", saved: null },
@@ -240,7 +244,7 @@ openSpecs.forEach((spec, k) => {
       : null,
     base_metrics: hasMetrics ? { ...cur } : null,
     delta: hasMetrics ? -spec.saved : null,
-    gates: hasMetrics ? gates(undefined, spec.pendingFrom) : [],
+    gates: hasMetrics ? gates(spec.failKey, spec.pendingFrom) : [],
     idea: null,
     url: `https://github.com/${REPO}/pull/${number}`,
     run_url: `https://github.com/${REPO}/actions/runs/${9_000_000 + number * 137}`,
@@ -310,16 +314,15 @@ const roles = {
   members: [
     { login: "kongeskog", role: "leader", since: iso(120), by: [] },
     { login: "mira-k", role: "leader", since: iso(30), by: ["kongeskog"] },
-    { login: "ana-rios", role: "reviewer", since: iso(70), by: ["kongeskog"] },
-    { login: "okabe-r", role: "reviewer", since: iso(41), by: ["kongeskog", "mira-k"] },
-    { login: "jdvries", role: "reviewer", since: iso(12), by: ["mira-k"] },
+    { login: "ana-rios", role: "ideator", since: iso(70), by: ["kongeskog"] },
+    { login: "okabe-r", role: "ideator", since: iso(41), by: ["kongeskog", "mira-k"] },
     { login: "lean-otter", role: "ideator", since: iso(55), by: ["kongeskog"] },
   ],
   applications: [
     {
       issue: 131,
       login: "qfwd",
-      role: "reviewer",
+      role: "ideator",
       opened_at: iso(3),
       status: "open",
       endorsements: [],

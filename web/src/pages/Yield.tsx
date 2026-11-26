@@ -355,7 +355,7 @@ function Body() {
           </CardHeader>
           <Bars rows={y().sizes} />
           <div class="border-t border-border px-5 py-2.5 text-xs text-faint">
-            Each change costs one review and one full build whatever its size.
+            Each change costs {store.reviewOn() ? "one review and one full build" : "one full build"} whatever its size.
             <Show when={store.rules()?.settings?.["Minimum improvement"] != null}>
               {" "}The current minimum is {num(Number(store.rules()!.settings["Minimum improvement"]))} tokens.
             </Show>
@@ -487,7 +487,9 @@ export default function Yield() {
   return (
     <Page
       title="Yield"
-      subtitle="Where the reduction comes from. Every change costs one review and one full build whatever its size; this is what each kind of change returned."
+      subtitle={`Where the reduction comes from. Every change costs ${
+        store.reviewOn() ? "one review and one full build" : "one full build"
+      } whatever its size; this is what each kind of change returned.`}
     >
       <WithState>{() => <Body />}</WithState>
     </Page>

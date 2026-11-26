@@ -310,8 +310,13 @@ function Timeline(props: { flows: Flow[]; mainRuns: OpsRun[]; from: number; to: 
             </div>
             <div class="mb-2 line-clamp-2 text-muted-foreground">{h().f.p.title}</div>
             <TipRow label="Opened" value={dayClock.format(h().f.t0)} />
-            <TipRow swatch="var(--series-1)" label="Until approved" value={span(h().f.review)} />
-            <TipRow swatch="var(--series-2)" label="Approved to merged" value={span(h().f.line)} />
+            <Show
+              when={store.reviewOn() || h().f.approved != null}
+              fallback={<TipRow swatch="var(--series-1)" label="Opened to merged" value={span(h().f.lead)} />}
+            >
+              <TipRow swatch="var(--series-1)" label="Until approved" value={span(h().f.review)} />
+              <TipRow swatch="var(--series-2)" label="Approved to merged" value={span(h().f.line)} />
+            </Show>
             <TipRow
               label="Verification runs"
               value={`${h().f.runs.length}${
@@ -321,7 +326,10 @@ function Timeline(props: { flows: Flow[]; mainRuns: OpsRun[]; from: number; to: 
               }`}
             />
             <Show when={h().f.sentBack}>
-              <TipRow label="Sent back by review" value={`${h().f.sentBack}×`} />
+              <TipRow
+                label={store.reviewOn() ? "Sent back by review" : "Changes requested"}
+                value={`${h().f.sentBack}×`}
+              />
             </Show>
             <Show when={h().f.p.delta != null}>
               <TipRow label="Tokens" value={signed(h().f.p.delta)} />
@@ -563,13 +571,16 @@ function Body(props: { ops: Ops; now: number }) {
         const t1 = closed ?? to();
         const merged = p.status === "merged";
         const split = approved != null ? Math.min(Math.max(approved, t0), t1) : undefined;
+        // Where no change needs an approval, the whole time from opened to
+        // merged is verification and the merge line.
+        const whole = !store.reviewOn() && split == null && merged ? t1 - t0 : undefined;
         return {
           p,
           t0,
           approved,
           t1,
           review: split != null ? split - t0 : undefined,
-          line: split != null && closed != null ? closed - split : undefined,
+          line: split != null && closed != null ? closed - split : whole,
           lead: merged ? t1 - t0 : undefined,
           sentBack: p.verdicts.filter((v) => !v.approve).length,
           runs: (runsByPr().get(p.pr) ?? []).filter((r) => (ms(r.ended_at) ?? to()) >= from()),
@@ -650,7 +661,11 @@ function Body(props: { ops: Ops; now: number }) {
         label: "Verification and merge line",
         share: total ? line / total : 0,
         value: span(line),
-        text: `Median time from approval to merge. It is ${pct(total ? (line / total) * 100 : 0, 0)} of a change's time in the pipeline; one verification takes about ${span(
+        text: `${
+          store.reviewOn()
+            ? `Median time from approval to merge. It is ${pct(total ? (line / total) * 100 : 0, 0)} of a change's time in the pipeline`
+            : "Median time from opening a change to its merge; no approval is waited for"
+        }; one verification takes about ${span(
           quantile(
             runs()
               .filter((r) => r.outcome === "success" && r.kind !== "main")
@@ -659,13 +674,17 @@ function Body(props: { ops: Ops; now: number }) {
           ),
         )}.`,
       },
-      {
-        key: "review",
-        label: "Review",
-        share: total ? review / total : 0,
-        value: span(review),
-        text: `Median time from opening a change to the approval that counted. ${merged().filter((f) => f.sentBack).length} of ${merged().length} merged changes were sent back at least once.`,
-      },
+      ...(store.reviewOn()
+        ? [
+            {
+              key: "review",
+              label: "Review",
+              share: total ? review / total : 0,
+              value: span(review),
+              text: `Median time from opening a change to the approval that counted. ${merged().filter((f) => f.sentBack).length} of ${merged().length} merged changes were sent back at least once.`,
+            },
+          ]
+        : []),
       {
         key: "ideas",
         label: "Idea supply",
@@ -705,14 +724,19 @@ function Body(props: { ops: Ops; now: number }) {
         </span>
       </div>
 
-      <div class="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border md:grid-cols-5">
+      <div
+        class="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border"
+        classList={{ "md:grid-cols-5": store.reviewOn(), "md:grid-cols-3": !store.reviewOn() }}
+      >
         <Stat
           label="Opened to merged"
           value={span(med((f) => f.lead))}
           sub={`median · 90% within ${span(med((f) => f.lead, 0.9))}`}
         />
-        <Stat label="Waiting for approval" value={span(med((f) => f.review))} sub="median, opened to approved" />
-        <Stat label="Approved to merged" value={span(med((f) => f.line))} sub="median, verification and line" />
+        <Show when={store.reviewOn()}>
+          <Stat label="Waiting for approval" value={span(med((f) => f.review))} sub="median, opened to approved" />
+          <Stat label="Approved to merged" value={span(med((f) => f.line))} sub="median, verification and line" />
+        </Show>
         <Stat
           label="Builds per merge"
           value={
@@ -765,15 +789,20 @@ function Body(props: { ops: Ops; now: number }) {
         <CardHeader class="flex-wrap">
           <CardTitle>Every change, from opened to merged</CardTitle>
           <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-            <Swatch color="var(--series-1)" label="Waiting for approval" />
-            <Swatch color="var(--series-2)" label="Approved, verifying or in line" />
+            <Show
+              when={store.reviewOn()}
+              fallback={<Swatch color="var(--series-1)" label="Open: verifying or in line" />}
+            >
+              <Swatch color="var(--series-1)" label="Waiting for approval" />
+              <Swatch color="var(--series-2)" label="Approved, verifying or in line" />
+            </Show>
             <Swatch color="var(--muted-foreground)" class="!h-1" label="Verification run" />
             <Swatch color="var(--border-strong)" class="!h-1" label="Cancelled run" />
             <span class="inline-flex items-center gap-1.5">
               <svg width="9" height="11" viewBox="-4.5 0 9 11" aria-hidden="true">
                 <path d="M0 0 l4.5 5.5 l-4.5 5.5 l-4.5 -5.5 z" fill="var(--foreground)" />
               </svg>
-              Sent back by review
+              {store.reviewOn() ? "Sent back by review" : "Changes requested"}
             </span>
           </div>
         </CardHeader>
@@ -889,10 +918,14 @@ function Body(props: { ops: Ops; now: number }) {
                 <tr class="border-b border-border">
                   <th class="px-5 py-2.5 font-normal">Change</th>
                   <th class="px-3 py-2.5 text-right font-normal">Total</th>
-                  <th class="px-3 py-2.5 text-right font-normal">To approval</th>
-                  <th class="px-3 py-2.5 text-right font-normal">To merge</th>
+                  <Show when={store.reviewOn()}>
+                    <th class="px-3 py-2.5 text-right font-normal">To approval</th>
+                    <th class="px-3 py-2.5 text-right font-normal">To merge</th>
+                  </Show>
                   <th class="px-3 py-2.5 text-right font-normal">Runs</th>
-                  <th class="px-3 py-2.5 text-right font-normal">Sent back</th>
+                  <th class="px-3 py-2.5 text-right font-normal">
+                    {store.reviewOn() ? "Sent back" : "Changes requested"}
+                  </th>
                   <th class="px-5 py-2.5 text-right font-normal">Tokens</th>
                 </tr>
               </thead>
@@ -907,8 +940,10 @@ function Body(props: { ops: Ops; now: number }) {
                         </a>
                       </td>
                       <td class="px-3 py-2.5 text-right font-mono tnum">{span(f.lead)}</td>
-                      <td class="px-3 py-2.5 text-right font-mono text-muted-foreground tnum">{span(f.review)}</td>
-                      <td class="px-3 py-2.5 text-right font-mono text-muted-foreground tnum">{span(f.line)}</td>
+                      <Show when={store.reviewOn()}>
+                        <td class="px-3 py-2.5 text-right font-mono text-muted-foreground tnum">{span(f.review)}</td>
+                        <td class="px-3 py-2.5 text-right font-mono text-muted-foreground tnum">{span(f.line)}</td>
+                      </Show>
                       <td class="px-3 py-2.5 text-right font-mono text-muted-foreground tnum">{f.runs.length}</td>
                       <td class="px-3 py-2.5 text-right font-mono text-muted-foreground tnum">{f.sentBack || "—"}</td>
                       <td class="px-5 py-2.5 text-right font-mono tnum">{signed(f.p.delta)}</td>
@@ -930,7 +965,9 @@ export default function Operations() {
   return (
     <Page
       title="Operations"
-      subtitle="Where time goes between an idea and a merge, measured from the pull requests, reviews and verification runs of the last three days."
+      subtitle={`Where time goes between an idea and a merge, measured from the pull requests${
+        store.reviewOn() ? ", reviews" : ""
+      } and verification runs of the last three days.`}
     >
       <Show
         when={store.ops()}

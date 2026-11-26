@@ -7,9 +7,21 @@ import { store } from "~/lib/data";
 import { ago, num, pct } from "~/lib/format";
 import type { Member, Role } from "~/lib/types";
 
-const GROUPS: { role: Role; title: string; note: string; empty: string }[] = [
-  { role: "leader", title: "Leaders", note: "grant roles, review, triage", empty: "No leaders listed yet." },
-  { role: "reviewer", title: "Reviewers", note: "their approval merges a change", empty: "No vetted reviewers yet; leaders review." },
+type Group = { role: Role; title: string; note: string; empty: string };
+/** The roles shown, as the arena's review setting has them. */
+const groups = (reviewOn: boolean): Group[] => [
+  {
+    role: "leader",
+    title: "Leaders",
+    note: reviewOn ? "grant roles, review, triage" : "grant roles, triage, can stop a change",
+    empty: "No leaders listed yet.",
+  },
+  {
+    role: "reviewer",
+    title: "Reviewers",
+    note: reviewOn ? "their approval merges a change" : "can stop a change; no approval is needed here",
+    empty: "No vetted reviewers yet; leaders review.",
+  },
   { role: "ideator", title: "Ideators", note: "their ideas go straight into the queue", empty: "No vetted ideators yet; leaders triage." },
 ];
 
@@ -45,11 +57,21 @@ export default function People() {
   const rolesOf = (login: string) =>
     (store.roles()?.members ?? []).filter((m) => m.login === login).map((m) => m.role);
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const reviewOn = store.reviewOn;
+  // Where no change needs an approval, the reviewer group is shown only if
+  // someone holds the role (they can still request changes).
+  const shown = createMemo(() =>
+    groups(reviewOn()).filter((g) => g.role !== "reviewer" || reviewOn() || members("reviewer").length > 0),
+  );
 
   return (
     <Page
       title="People"
-      subtitle="Anyone can contribute changes. Reviewing, and putting ideas straight into the queue, are earned: the leaders vet each person on their record."
+      subtitle={
+        reviewOn()
+          ? "Anyone can contribute changes. Reviewing, and putting ideas straight into the queue, are earned: the leaders vet each person on their record."
+          : "Anyone can contribute changes, and a change whose gates all pass merges without anyone's approval. Putting ideas straight into the queue is earned: the leaders vet each person on their record."
+      }
     >
       <Card class="mb-6 overflow-hidden">
         <CardHeader>
@@ -108,7 +130,7 @@ export default function People() {
 
       <div class="grid gap-6 lg:grid-cols-5">
         <div class="flex flex-col gap-6 lg:col-span-3">
-          <For each={GROUPS}>
+          <For each={shown()}>
             {(g) => (
               <Card class="overflow-hidden">
                 <CardHeader>
@@ -176,21 +198,23 @@ export default function People() {
             </CardHeader>
             <ul class="divide-y divide-border text-sm leading-relaxed text-muted-foreground">
               <li class="px-5 py-3.5">
-                <span class="font-medium text-foreground">Contributor.</span> Anyone. Open a pull request;
-                the gates and a vetted reviewer decide.
+                <span class="font-medium text-foreground">Contributor.</span> Anyone. Open a pull request;{" "}
+                {reviewOn() ? "the gates and a vetted reviewer decide." : "the gates decide, and nobody has to approve it."}
               </li>
-              <li class="px-5 py-3.5">
-                <span class="font-medium text-foreground">Reviewer.</span>{" "}
-                <Show when={rr()} fallback="Earned by merged changes and a leader's endorsement.">
-                  {(r) => (
-                    <>
-                      After {plural(r().reviewer_min_merged, "merged change")}, comment{" "}
-                      <code class="font-mono text-[13px] text-foreground">/apply reviewer</code>;{" "}
-                      {plural(r().endorsements, "leader endorsement")} grants it.
-                    </>
-                  )}
-                </Show>
-              </li>
+              <Show when={reviewOn()}>
+                <li class="px-5 py-3.5">
+                  <span class="font-medium text-foreground">Reviewer.</span>{" "}
+                  <Show when={rr()} fallback="Earned by merged changes and a leader's endorsement.">
+                    {(r) => (
+                      <>
+                        After {plural(r().reviewer_min_merged, "merged change")}, comment{" "}
+                        <code class="font-mono text-[13px] text-foreground">/apply reviewer</code>;{" "}
+                        {plural(r().endorsements, "leader endorsement")} grants it.
+                      </>
+                    )}
+                  </Show>
+                </li>
+              </Show>
               <li class="px-5 py-3.5">
                 <span class="font-medium text-foreground">Ideator.</span> Ideas from newcomers are proposed
                 until an ideator or leader accepts them.{" "}
@@ -215,7 +239,9 @@ export default function People() {
                     </>
                   )}
                 </Show>{" "}
-                Leaders can also grant or revoke reviewer and ideator directly.
+                {reviewOn()
+                  ? "Leaders can also grant or revoke reviewer and ideator directly."
+                  : "Leaders can also grant or revoke ideator directly, and can stop a change that passes the gates by requesting changes on it."}
               </li>
             </ul>
           </Card>

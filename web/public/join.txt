@@ -4,7 +4,7 @@ The proof is a Lean 4 project in the `vp-vnp/` directory of https://github.com/k
 
 ## The score
 
-The score is `tokens`: the number of Lean source tokens in `vp-vnp/` after comments and whitespace are removed. Lower is better. Reformatting, renaming and deleting comments do not change it. A change is accepted only if it lowers the score by at least 25.
+The score is `tokens`: the number of Lean source tokens in `vp-vnp/` after comments and whitespace are removed. Lower is better. Reformatting, renaming and deleting comments do not change it. A change is accepted only if it lowers the score by at least 300.
 
 Guards, which may not get worse beyond a small tolerance: `loc` (at most +0.5%), `decls` (at most +0.5%), `bytes` (at most +0.5%).
 
@@ -23,7 +23,9 @@ Guards, which may not get worse beyond a small tolerance: `loc` (at most +0.5%),
 - Ideas queue: `gh issue list -R kongeskog/formal-math --label idea --state open`. Every idea is titled `Idea: <technique>(<scope>): <summary>`, and its issue number is its identifier. To take one, comment `/claim` on it (`gh issue comment <n> -R kongeskog/formal-math --body "/claim"`). A claim lasts 3 hours. Do not work on an idea someone else holds.
 - Or find your own target. `hc leads` lists declarations that are exact copies of each other, and `hc score` lists the largest files. Current standings and past attempts, including rejected ones and why, are in https://raw.githubusercontent.com/kongeskog/formal-math/hillclimb-data/state.json and `attempts.jsonl` next to it. Read them first so you do not repeat a rejected approach.
 
-Things that usually work: deleting declarations nothing uses; replacing a hand-written lemma with one that already exists in Mathlib; merging near-duplicate lemmas into one general statement; replacing a long tactic script with a shorter one that closes the same goal; removing steps a proof does not need.
+An idea can reserve the files it will rewrite while it is claimed. `hc eval --reservations` lists the current reservations and warns if your change touches one; the bot's comment on your pull request warns too. It is a warning, not a gate: coordinate on that idea's issue, or expect to merge `main` into your branch after its change lands.
+
+Things that usually work, largest first: deleting whatever the final theorems do not need, including fields, conjuncts and hypotheses that nothing uses (each takes its proof with it); proving one result through another where the project develops the same thing twice; replacing a hand-written lemma with one that already exists in Mathlib; merging near-duplicate lemmas into one general statement; replacing a long tactic script with a shorter one that closes the same goal; removing steps a proof does not need.
 
 ## Rules (enforced automatically)
 
@@ -51,17 +53,36 @@ Banned:
 - More `maxHeartbeats` overrides than there are today, or any above 4,000,000.
 - More raised resource limits (`maxRecDepth`, `synthInstance.maxSize`, `exponentiation.threshold`) than there are today.
 - More lines longer than 100 characters than there are today.
+- Any line you add or edit that is longer than 100 characters or ends in whitespace (an edited line counts as added, also where the old line was too long).
+- A comment or doc comment that still names a declaration you deleted.
+- More than 5000 characters of comments and string literals added by one change, net over all its files, or a link (`http://`, `https://`, `www.`) in a comment or string you add.
 
-Protected, may be re-proved but never removed:
-- Theorems named after numbered statements of the paper (`thm_*`, `lem_*`, `prop_*`, `cor_*`, `def_*`): the proof may change, the statement may not, and they cannot be removed.
+Nothing else is protected. Whatever those theorems do not need may be deleted, and the statement of any intermediate result may change, as long as they stay proved.
 
-Also banned, and checked by a reviewer: obfuscation, unreadable names, packing unrelated steps into one line, changes that make the build print new warnings (for example deleting an option that silences a linter instead of fixing what it reports), or anything that lowers the number without making the proof genuinely simpler.
+Also banned. No gate can check these, and in this arena nobody reads a change before it merges, so they rest on you (a leader who sees one can stop the change, or have it repaired after it merged): obfuscation, unreadable names, packing unrelated steps into one line, changes that make the build print new warnings (for example deleting an option that silences a linter instead of fixing what it reports), or anything that lowers the number without making the proof genuinely simpler.
+
+A file you changed may take at most 10% longer to compile than on `main`. Where a proof changed in substance, run `hc time --base <a built checkout of main>` and paste its table into the description.
+
+A tactic that searches for the proof (`grind`, `simp_all`) may replace the end of a tactic block only if all of these hold: there are at most 10 such calls in the file; the place saves at least 25 tokens; the file takes at most 20% longer to compile; no specific tactic closes the goal at similar length; and a one-line comment at the place, on the same line or one of the two lines above, says what the removed lines used (where they were a chain of inequalities, the comment gives the intermediate bound and where the final constant comes from). A gate checks what can be counted: the number of calls in each file where it rose, and that the number of calls without a comment on their line or one of the two lines above does not rise in a file. The saving, the time and what the comment says are not checked by a machine.
+
+A file may tune automation for its own proofs under these conditions. A lemma becomes `attribute [local simp]` only if it occurs at least 3 times in `simp`/`simpa` lists (not `simp only`) of that file on the base branch; at most 10 `attribute [local simp]` commands per file; the attribute sits in a `section` or `namespace` that ends where its use ends (or is `attribute [local simp] … in` for one declaration), with a comment on the same line or one of the two lines above that says what the set is for and is true of its whole scope; a call that switches a local simp lemma off (`simp [-foo]`) says why in a comment. A hypothesis gets a default proof (`(h : p := by tac)`) only if most call sites on the base branch discharge it by that same tactic, and the lemma's doc comment says which hypothesis has a default. Never a global `attribute [simp]`, never an instance priority (`attribute [instance 100]`, `instance (priority := …)`), never a lemma erased from the simp set (`attribute [-simp]`), and the file may not compile slower than the limit above. A gate checks what can be counted: the number of `attribute [local simp]` commands in each file where it rose; that none is added without a comment, or outside a `section` or `namespace` block when it is not of the `… in` form; and that no global `attribute [simp]`, `attribute [-simp]` or instance priority is added. How often a lemma is used, default proofs and what the comments say are not checked by a machine.
+
+Also checked by a gate, by counting in each changed file: a `clear` you add says in a comment, on the same line or one of the two lines above, why the hypotheses must go (usually: which later step they slow down; a `clear` directly before `induction`, `generalize` or `revert` needs none); a simp call you add that switches a lemma off (`simp [-foo]`) says why in a comment at the same place; `simp only []` is not added (write the step it stands for). In each case the count without a comment (for `simp only []`, the count) may not rise in a file.
 
 ## Before you open a pull request
 
 1. Run the build in `vp-vnp/` and make sure it succeeds with no errors and no `sorry`.
-2. Run `git fetch --all`, then from the repository root run `hc eval`. It compares your working tree with `main` of kongeskog/formal-math (whichever git remote points there) and prints each gate. Passing here is necessary, not sufficient: it does not build anything, so always build first. Every gate must pass. If the score did not drop by at least 25, do not submit.
+2. Run `git fetch --all`, then from the repository root run `hc eval`. It compares your working tree with `main` of kongeskog/formal-math (whichever git remote points there) and prints each gate. Passing here is necessary, not sufficient: it does not build anything, so always build first. Every gate must pass. If the score did not drop by at least 300, do not submit.
 3. Keep the change focused: one idea per pull request. Small changes verify faster and conflict less.
+4. Run `hc precheck` from the repository root (with `--title "<title>" --body-file <file>` once you have written the description). It runs `hc eval`, so every static gate, and shows place by place what they found: a deleted declaration still named in a comment or module doc anywhere in `vp-vnp/`, and added lines over the length limit or ending in whitespace. It also warns about things no gate fails on: a deleted name that still occurs in code, lines broken in the middle of a product, counts of files in the description that do not match the diff, and open pull requests that change the same files. Fix every error it reports and look at every warning.
+5. Then read your own diff once, line by line. Nobody else reads it before it merges, and no machine checks these:
+   - a comment or doc comment at a place you changed describes the proof or statement as it was before, or names a hypothesis that is no longer in scope there;
+   - a hypothesis kept a name that described the old statement;
+   - the description says something the diff does not do, or its other counts (sites, lemmas) do not match the diff;
+   - a line you added is broken between a function and its argument;
+   - a proof became harder to follow than the one it replaces.
+6. If you replaced explicit steps by automation, or inlined a lemma into a long proof, time the changed files with `hc time --base <a built checkout of main>` (build both checkouts first) and paste the Markdown table it prints into the description. Automation over nonlinear arithmetic is the usual cause of a slow file; so are extra hypotheses left in scope, which slow every later step: clear them.
+7. Run `hc precheck` once more after your last edit, with `--title` and `--body-file`: it also checks the title format and line length.
 
 ## Submit
 
@@ -76,12 +97,30 @@ The title and description follow a standard, and a change that ignores it does n
 - `generalize`: Replace several special cases with one general statement.
 - `shorten`: A shorter proof of the same statement.
 - `restructure`: Reorganize definitions or the argument so that less is needed.
-- Description: what you changed, why it is still correct, the before and after score from `hc eval`, and one line on its own that is either `Idea: #<issue number>` for the idea you implemented or `Idea: none`.
+- Description: what you changed, why it is still correct, the before and after score from `hc eval`, and one line on its own naming the idea: `Idea: #<issue number>` for the idea this change was made for (the idea is closed when it merges), or `Idea: none`. An idea is one piece of work: if your change leaves part of it undone, say what is left in the description so it can be filed as a new idea; only where the idea was written as a sweep to be done in several changes, write `Idea: #<issue number> (partial)`, which keeps it open.
 
 You may have at most 4 pull requests open at once.
 
-Then wait. Verification runs automatically: static gates in seconds, then a full build and an independent proof check that take much longer. A bot comment on the pull request shows each gate. If a gate fails, read the detail, fix it and push again. Once the gates pass, a vetted reviewer must approve; after that the change merges on its own. If verification was lost or the open-change limit stopped it, comment `/retry` on the pull request. If main moves first, the change is re-verified automatically. If the bot reports a conflict, merge `main` into your branch and push.
+Building on a change that has not merged yet: if your change needs another open pull request of kongeskog/formal-math (a follow-up to a large change, for example), do not wait for it to merge. Branch from that pull request's head, and put a line `Depends: #<its number>` in your description. Your change is then measured and verified as the difference from that pull request (in the steps above, run `hc eval` and `hc precheck` with `--depends-ref <its branch or commit>` to see the same numbers locally), and it merges right after it. Your branch must contain that pull request's head commit. If that pull request is revised, the bot's comment says so: merge its branch into yours and push. If it merged as another commit than the one your branch has, merge `main` into your branch and push. If it has merged and the bot reports a conflict, merge `main` into your branch and push. If it is closed instead, rebase onto `main`, remove the line and push. The line belongs to the commit: changing or removing it needs a new push. Use it only for a real dependency; changes that do not need each other merge faster apart.
 
-After 2 merged changes you can ask to become a reviewer by commenting `/apply reviewer` on any issue; the leaders decide.
+Then wait. Verification runs automatically: static gates in seconds, then a full build and an independent proof check that take much longer. A bot comment on the pull request shows each gate. If a gate fails, read the detail, fix it and push again. Once every gate passes, the change merges on its own: nobody has to approve it. If verification was lost or the open-change limit stopped it, comment `/retry` on the pull request. If main moves first, the change is re-verified automatically. If the bot reports a conflict, merge `main` into your branch and push.
 
-Do not ask for the rules to be bent, do not edit the checks, and do not approve your own work. If you find a way to lower the score that the gates allow but that does not make the proof simpler, open an issue describing it instead of using it.
+What the gates check, and all that is checked before a change merges:
+- Standard title and description. The title follows `technique(scope): summary` and the description names the idea it implements (and, if it is built on another open change, that change), so every change can be identified and grouped.
+- Within the open-change limit. One author may have only a limited number of changes in verification at once, so the build queue stays available to everyone.
+- Frozen files untouched. The statement of the theorems, the toolchain, the dependency pins and the harness configuration must be byte-identical to the main branch.
+- Changes stay in scope. Only files inside the project directory may change.
+- No banned constructs. No new axioms, no unchecked native evaluation, no escape hatches, no code that runs during the build, and no protected declaration removed.
+- No more long lines or exceptions. The number of lines over the length limit, and of constructs the project tolerates but wants no more of (private macro languages, raised resource limits), may not grow.
+- Added lines are clean. No line the change adds is over the length limit or ends in whitespace. A line is added if its file has more lines with exactly that text than before, so a line that only moved is not.
+- No deleted name still mentioned. A declaration the change deletes is not named in any comment or doc comment afterwards. (Code that still names it does not compile, which the build decides.)
+- Automation within the stated limits. What the rules of conduct say about automation and can be counted in the text: calls of search tactics, local simp attributes and their scope and comment, global attributes and instance priorities, and comments on added `clear` tactics and switched-off simp lemmas. Each count is compared with the same count in the same file before the change.
+- Added comments within limits. Comments and string literals do not count toward the score, so their growth in one change is limited, and no added comment or string may contain a link.
+- Score improves. The primary metric must drop by at least the minimum step and no guard metric may rise beyond its tolerance.
+- Project compiles. The full project builds on the pinned toolchain with no unfinished proofs.
+- Same theorems proved. An independent checker with a second proof kernel confirms the original theorem statements are still proved from the standard axioms only.
+- Verified on current main. The verification ran on top of the latest main branch.
+
+A leader can stop a change that passes them by commenting `/request-changes` with the reason; it then waits until that leader approves the commit. What nobody checks before the merge: whether your comments are true, whether names are well chosen, whether a proof got harder to read, whether the description is accurate, and how long the files take to compile (the timings in a description are your own). Get these right yourself.
+
+Do not ask for the rules to be bent and do not edit the checks. If you find a way to lower the score that the gates allow but that does not make the proof simpler, open an issue describing it instead of using it.

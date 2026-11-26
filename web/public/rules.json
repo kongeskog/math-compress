@@ -20,15 +20,21 @@
     },
     {
       "command": "/approve <commit>",
-      "does": "Approve exactly that commit.",
+      "does": "Withdraw your own request for changes, for exactly that commit, named by its full hash. No change needs an approval here.",
       "where": "a pull request",
       "who": "reviewers and leaders"
     },
     {
       "command": "/request-changes <reason>",
-      "does": "Block the change until the same reviewer approves.",
+      "does": "Stop a change that passes the gates: it does not merge until the same person approves its head commit.",
       "where": "a pull request",
       "who": "reviewers and leaders"
+    },
+    {
+      "command": "/waive-min <commit> <reason>",
+      "does": "Accept a saving below the minimum for exactly that commit; it must still lower the score by at least 1.",
+      "where": "a pull request",
+      "who": "leaders"
     },
     {
       "command": "/accept",
@@ -43,7 +49,7 @@
       "who": "ideators and leaders"
     },
     {
-      "command": "/apply reviewer|ideator|leader",
+      "command": "/apply ideator|leader",
       "does": "Open an application for leaders to judge.",
       "where": "any issue",
       "who": "anyone with enough merged changes"
@@ -127,7 +133,7 @@
   ],
   "gates": [
     {
-      "description": "The title follows `technique(scope): summary` and the description names the idea it implements, so every change can be identified and grouped.",
+      "description": "The title follows `technique(scope): summary` and the description names the idea it implements (and, if it is built on another open change, that change), so every change can be identified and grouped.",
       "key": "format",
       "label": "Standard title and description"
     },
@@ -147,9 +153,34 @@
       "label": "Changes stay in scope"
     },
     {
-      "description": "No new axioms, no unchecked native evaluation, no escape hatches, no code that runs during the build, no private macro languages, no raised resource limits, and no protected declaration removed.",
+      "description": "No new axioms, no unchecked native evaluation, no escape hatches, no code that runs during the build, and no protected declaration removed.",
       "key": "deny",
       "label": "No banned constructs"
+    },
+    {
+      "description": "The number of lines over the length limit, and of constructs the project tolerates but wants no more of (private macro languages, raised resource limits), may not grow.",
+      "key": "no_increase",
+      "label": "No more long lines or exceptions"
+    },
+    {
+      "description": "No line the change adds is over the length limit or ends in whitespace. A line is added if its file has more lines with exactly that text than before, so a line that only moved is not.",
+      "key": "added_lines",
+      "label": "Added lines are clean"
+    },
+    {
+      "description": "A declaration the change deletes is not named in any comment or doc comment afterwards. (Code that still names it does not compile, which the build decides.)",
+      "key": "deleted_names",
+      "label": "No deleted name still mentioned"
+    },
+    {
+      "description": "What the rules of conduct say about automation and can be counted in the text: calls of search tactics, local simp attributes and their scope and comment, global attributes and instance priorities, and comments on added `clear` tactics and switched-off simp lemmas. Each count is compared with the same count in the same file before the change.",
+      "key": "conduct",
+      "label": "Automation within the stated limits"
+    },
+    {
+      "description": "Comments and string literals do not count toward the score, so their growth in one change is limited, and no added comment or string may contain a link.",
+      "key": "comments",
+      "label": "Added comments within limits"
     },
     {
       "description": "The primary metric must drop by at least the minimum step and no guard metric may rise beyond its tolerance.",
@@ -170,11 +201,6 @@
       "description": "The verification ran on top of the latest main branch.",
       "key": "fresh",
       "label": "Verified on current main"
-    },
-    {
-      "description": "Approved by a vetted reviewer other than the author.",
-      "key": "review",
-      "label": "Independent review"
     }
   ],
   "metrics": [
@@ -215,12 +241,13 @@
       "unit": "s"
     }
   ],
-  "protect": [
-    {
-      "description": "Declarations named after numbered statements of the paper (`thm_*`, `lem_*`, `prop_*`, `cor_*`, `def_*`) may be re-proved but not removed.",
-      "name": "paper statements"
-    }
-  ],
+  "protect": [],
+  "review": {
+    "large_change_files": 20,
+    "on": false,
+    "required": 0,
+    "required_large": 0
+  },
   "roles": {
     "bootstrap": true,
     "endorsements": 1,
@@ -233,15 +260,20 @@
     "reviewer_min_merged": 2
   },
   "settings": {
-    "Approvals for large changes": 2,
-    "Approvals required": 1,
+    "Added comments and string literals per change (max characters)": 5000,
+    "Approvals required": "none: a change merges when its gates pass",
+    "Comment on a switched-off simp lemma": "checked",
+    "Comment on an added clear": "checked",
+    "Compile time of a changed file (max % slower, not checked by a gate)": 10,
     "Idea claim length (hours)": 3,
-    "Large change threshold (files)": 20,
+    "Local simp attributes": "allowed under conditions, at most 10 in a file",
     "Maximum line length": 100,
     "Minimum account age to apply for a role (days)": 30,
-    "Minimum improvement": 25,
+    "Minimum improvement": 300,
+    "No added simp only []": "checked",
     "Open changes per author": 4,
-    "Primary metric": "tokens"
+    "Primary metric": "tokens",
+    "Search tactics to shorten proofs": "allowed under conditions, at most 10 in a file"
   },
   "techniques": [
     {

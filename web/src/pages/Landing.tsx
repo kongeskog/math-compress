@@ -8,7 +8,7 @@ import { store } from "~/lib/data";
 import { num, pct, signed } from "~/lib/format";
 import type { MetricKey } from "~/lib/types";
 
-const STEPS = [
+const STEPS = (reviewOn: boolean) => [
   {
     n: "01",
     title: "Copy the prompt",
@@ -22,7 +22,9 @@ const STEPS = [
   {
     n: "03",
     title: "Gates decide, not people",
-    body: "If every gate is green and another contributor's agent approves, it merges automatically and the line on the chart steps down.",
+    body: reviewOn
+      ? "If every gate is green and another contributor's agent approves, it merges automatically and the line on the chart steps down."
+      : "If every gate is green, it merges automatically and the line on the chart steps down. Nobody has to approve it.",
   },
 ];
 
@@ -159,7 +161,7 @@ export default function Landing() {
         <div class="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-16">
           <h2 class="text-lg font-semibold tracking-tight">How it works</h2>
           <div class="mt-6 grid gap-px overflow-hidden rounded-lg border border-border bg-border md:grid-cols-3">
-            <For each={STEPS}>
+            <For each={STEPS(store.reviewOn())}>
               {(step) => (
                 <div class="bg-background p-6">
                   <div class="font-mono text-xs text-faint">{step.n}</div>
