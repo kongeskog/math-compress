@@ -26,7 +26,7 @@
     },
     {
       "command": "/request-changes <reason>",
-      "does": "Stop a change that passes the gates: it does not merge until the same person approves its head commit.",
+      "does": "Stop a change that passes the gates: it does not merge until the same person approves its head commit. On a line of its own; the bot acknowledges it.",
       "where": "a pull request",
       "who": "reviewers and leaders"
     },
@@ -163,7 +163,7 @@
       "label": "No more long lines or exceptions"
     },
     {
-      "description": "No line the change adds is over the length limit or ends in whitespace. A line is added if its file has more lines with exactly that text than before, so a line that only moved is not.",
+      "description": "No line the change adds is over the length limit, ends in whitespace of any kind, or holds a control character or one that does not show. A line is added if its file has more lines with exactly that text than before, so a line that only moved is not.",
       "key": "added_lines",
       "label": "Added lines are clean"
     },
@@ -173,14 +173,14 @@
       "label": "No deleted name still mentioned"
     },
     {
-      "description": "What the rules of conduct say about automation and can be counted in the text: calls of search tactics, local simp attributes and their scope and comment, global attributes and instance priorities, and comments on added `clear` tactics and switched-off simp lemmas. Each count is compared with the same count in the same file before the change.",
+      "description": "What the rules of conduct say about automation and can be counted in the text: calls of search tactics (with `?` or `!` too), local simp attributes and their scope and comment, global simp attributes as a command or on a declaration, other attributes that tune automation, instance priorities, and comments on added `clear` tactics and switched-off simp lemmas. Each count is compared with the same count in the same file before the change.",
       "key": "conduct",
       "label": "Automation within the stated limits"
     },
     {
-      "description": "Comments and string literals do not count toward the score, so their growth in one change is limited, and no added comment or string may contain a link.",
+      "description": "Comments, string literals and quoted names do not count toward the score, so what the added lines hold of them is limited. No added line and no added path holds a link. Every string and comment is closed, and no string or quoted name runs over a line break, so that what is counted is what the compiler reads. Added files are few, are not empty, and have plain paths.",
       "key": "comments",
-      "label": "Added comments within limits"
+      "label": "Added text within limits"
     },
     {
       "description": "The primary metric must drop by at least the minimum step and no guard metric may rise beyond its tolerance.",
@@ -260,11 +260,12 @@
     "reviewer_min_merged": 2
   },
   "settings": {
-    "Added comments and string literals per change (max characters)": 5000,
     "Approvals required": "none: a change merges when its gates pass",
     "Comment on a switched-off simp lemma": "checked",
     "Comment on an added clear": "checked",
+    "Comments, strings and quoted names on the lines a change adds (max characters)": 12000,
     "Compile time of a changed file (max % slower, not checked by a gate)": 10,
+    "Files a change may add": 10,
     "Idea claim length (hours)": 3,
     "Local simp attributes": "allowed under conditions, at most 10 in a file",
     "Maximum line length": 100,
@@ -272,6 +273,7 @@
     "Minimum improvement": 300,
     "No added simp only []": "checked",
     "Open changes per author": 4,
+    "Path of an added file (max characters)": 80,
     "Primary metric": "tokens",
     "Search tactics to shorten proofs": "allowed under conditions, at most 10 in a file"
   },

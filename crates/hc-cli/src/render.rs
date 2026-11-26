@@ -212,7 +212,9 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
         ("reviewer_min_merged", cfg.roles.reviewer_min_merged.to_string()),
         ("ideator_min_merged", cfg.roles.ideator_min_merged.to_string()),
     ];
-    let mut out = conditional(template, "review", review.on());
+    let mut out = conditional(template, "review_all", review.required > 0);
+    out = conditional(&out, "review_large_only", review.required == 0 && review.required_large > 0);
+    out = conditional(&out, "review", review.on());
     out = conditional(&out, "large_review", review.required_large > review.required);
     for (k, v) in vars {
         out = out.replace(&format!("{{{{{k}}}}}"), &v);
@@ -282,12 +284,20 @@ pub fn site_files(cfg: &Config, out: &Path, site: &str) -> Result<()> {
     }
     set("Open changes per author", json!(cfg.limits.max_open_prs));
     set(
-        "Added comments and string literals per change (max characters)",
+        "Comments, strings and quoted names on the lines a change adds (max characters)",
         match cfg.limits.max_added_comment_chars {
             0 => json!("no limit"),
             n => json!(n),
         },
     );
+    set(
+        "Files a change may add",
+        match cfg.limits.max_added_files {
+            0 => json!("no limit"),
+            n => json!(n),
+        },
+    );
+    set("Path of an added file (max characters)", json!(cfg.limits.max_path_length));
     set("Minimum account age to apply for a role (days)", json!(cfg.roles.min_account_age_days));
     set("Idea claim length (hours)", json!(cfg.ideas.lease_hours));
     set("Compile time of a changed file (max % slower, not checked by a gate)", json!(conduct.max_slowdown_pct));
@@ -349,9 +359,9 @@ pub fn site_files(cfg: &Config, out: &Path, site: &str) -> Result<()> {
                 "Withdraw your own request for changes, for exactly that commit, named by its full hash. No change needs an approval here."
             }},
             {"command": "/request-changes <reason>", "who": "reviewers and leaders", "where": "a pull request", "does": if review.on() {
-                "Block the change until the same reviewer approves."
+                "Block the change until the same reviewer approves. On a line of its own; the bot acknowledges it."
             } else {
-                "Stop a change that passes the gates: it does not merge until the same person approves its head commit."
+                "Stop a change that passes the gates: it does not merge until the same person approves its head commit. On a line of its own; the bot acknowledges it."
             }},
             {"command": "/waive-min <commit> <reason>", "who": "leaders", "where": "a pull request", "does": "Accept a saving below the minimum for exactly that commit; it must still lower the score by at least 1."},
             {"command": "/accept", "who": "ideators and leaders", "where": "a proposed idea", "does": "Put the idea into the queue."},
@@ -454,6 +464,9 @@ mod tests {
         assert!(text.contains("`/request-changes`") && text.lines().count() < 10, "{text}");
         assert!(prompt("reviewer", &on).contains("One approval from an account other than the author's merges a change (large changes need 2)"));
         let large_only = cfg("[review]\nrequired = 0\nrequired_large = 1\n");
+        let text = prompt("contributor", &large_only);
+        assert!(text.contains("a change of at most 20 files merges on its own: nobody has to approve it. Only a larger one needs a reviewer: 1 approval(s)"), "{text}");
+        assert!(!text.contains("a vetted reviewer must approve") && !text.contains("checked by a reviewer:"), "{text}");
         assert!(prompt("reviewer", &large_only).contains("only a change of more than 20 files needs approval"));
 
         // Coordinator: no reviewers are started.

@@ -60,7 +60,7 @@ const GATES = [
   ["added_lines", "Added lines are clean"],
   ["deleted_names", "No deleted name still mentioned"],
   ["conduct", "Automation within the stated limits"],
-  ["comments", "Added comments within limits"],
+  ["comments", "Added text within limits"],
   ["build", "Compiles without sorry"],
   ["comparator", "Same theorems, same axioms"],
   ["improves", "Score improves, guards hold"],

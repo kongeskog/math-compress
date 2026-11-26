@@ -224,46 +224,71 @@ fn run_once(dir: &Path, command: &str) -> std::result::Result<f64, String> {
     }
 }
 
-/// Files under `project` whose compiled module is missing or older than the
-/// source, ignoring `skip` (paths relative to `project`).
-fn stale_modules(project: &Path, skip: &BTreeSet<String>) -> Vec<String> {
-    let lib = project.join(".lake/build/lib/lean");
-    let mut out = Vec::new();
-    let mut sources = Vec::new();
-    lean_files(project, &mut sources);
-    for p in &sources {
-        let Ok(rel) = p.strip_prefix(project) else { continue };
-        let rel_s = rel.to_string_lossy().replace('\\', "/");
-        // Only modules the build produced (or should have) count; scripts and
-        // stray files outside the library are not compiled by `lake build`.
-        if skip.contains(&rel_s) || rel_s == "lakefile.lean" || rel_s.starts_with("scripts/") {
-            continue;
-        }
-        let olean = lib.join(rel).with_extension("olean");
-        let src_time = std::fs::metadata(p).ok().and_then(|m| m.modified().ok());
-        let built = std::fs::metadata(&olean).ok().and_then(|m| m.modified().ok());
-        match (src_time, built) {
-            (Some(s), Some(b)) if b >= s => {}
-            _ => out.push(rel_s),
-        }
-    }
-    out.sort();
-    out
+/// Whether what the timed files import is built, as the build tool sees it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Imports {
+    UpToDate,
+    /// These modules would be built again.
+    Stale(Vec<String>),
+    /// The build tool could not say (its last words).
+    Unknown(String),
 }
 
-/// Every `.lean` file under `dir`, skipping hidden directories such as `.lake`.
-fn lean_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    for e in entries.flatten() {
-        let p = e.path();
-        let Ok(ft) = e.file_type() else { continue };
-        if ft.is_dir() {
-            if !e.file_name().to_string_lossy().starts_with('.') {
-                lean_files(&p, out);
-            }
-        } else if ft.is_file() && p.extension().is_some_and(|x| x == "lean") {
-            out.push(p);
+/// What `lake build --no-build <file>:deps …` said: it exits 0 when every
+/// import of the files is up to date, and 3 after naming the modules that
+/// are not. Lake decides by the hashes in its trace files, so a build
+/// directory that was copied, or sources that were checked out again, are
+/// up to date although every file time differs. (Comparing the times of
+/// source and compiled files, as this command did, warned about every
+/// module then.)
+pub fn imports_state(exit: Option<i32>, output: &str) -> Imports {
+    match exit {
+        Some(0) => Imports::UpToDate,
+        Some(3) => {
+            let mut stale: Vec<String> =
+                output.lines().filter_map(|l| l.trim().strip_prefix("- ")).map(str::to_string).collect();
+            stale.sort();
+            stale.dedup();
+            Imports::Stale(stale)
         }
+        _ => Imports::Unknown(output.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no output").trim().to_string()),
+    }
+}
+
+/// Ask lake about the imports of `files` (paths relative to `project`).
+/// Nothing is built.
+fn ask_lake(project: &Path, files: &BTreeSet<String>) -> Imports {
+    let targets: Vec<String> = files.iter().filter(|f| project.join(f).is_file()).map(|f| format!("{f}:deps")).collect();
+    if targets.is_empty() {
+        return Imports::UpToDate;
+    }
+    match Command::new("lake").args(["build", "--no-build"]).args(&targets).current_dir(project).output() {
+        Ok(o) => {
+            let text = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+            imports_state(o.status.code(), &text)
+        }
+        Err(e) => Imports::Unknown(format!("`lake` could not be run: {e}")),
+    }
+}
+
+/// What to tell the user about a checkout's build, if anything.
+pub fn build_warning(label: &str, project: &Path, state: &Imports) -> Option<String> {
+    match state {
+        Imports::UpToDate => None,
+        Imports::Stale(modules) => Some(format!(
+            "warning: {label}: lake would build {} module(s) in {} again that the timed files import{}. A timed file would fail or be timed against the wrong thing; run `lake build` there first.",
+            modules.len().max(1),
+            project.display(),
+            if modules.is_empty() {
+                String::new()
+            } else {
+                format!(" (for example {})", modules.iter().take(3).cloned().collect::<Vec<_>>().join(", "))
+            }
+        )),
+        Imports::Unknown(why) => Some(format!(
+            "warning: {label}: could not ask lake whether {} is built ({why}); if a file fails to compile below, run `lake build` there first.",
+            project.display()
+        )),
     }
 }
 
@@ -274,14 +299,8 @@ fn check_build(label: &str, project: &Path, timed: &BTreeSet<String>) -> Result<
             project.display()
         );
     }
-    let stale = stale_modules(project, timed);
-    if !stale.is_empty() {
-        eprintln!(
-            "warning: {label}: {} module(s) in {} are not built or are older than their source (for example {}). A timed file that imports them will fail or time the wrong thing; run `lake build` there first.",
-            stale.len(),
-            project.display(),
-            stale.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
-        );
+    if let Some(warning) = build_warning(label, project, &ask_lake(project, timed)) {
+        eprintln!("{warning}");
     }
     Ok(())
 }
@@ -474,6 +493,25 @@ mod tests {
         assert_eq!(limit_for(&c, base, "by simp_all!").pct, Some(20));
         c.max_slowdown_pct = 0;
         assert_eq!(limit_for(&c, base, base).pct, None);
+    }
+
+    /// What lake 5 prints, taken from runs in a copy of a built project: the
+    /// copy has new file times throughout and is up to date all the same.
+    #[test]
+    fn staleness_is_what_lake_says_not_what_file_times_say() {
+        assert_eq!(imports_state(Some(0), "All targets up-to-date (8774 jobs).\n"), Imports::UpToDate);
+        let out = "✖ [8772/8774] Building Paper.Lengths\nerror: target is out-of-date and needs to be rebuilt\nSome required targets logged failures:\n- Paper.Lengths\n";
+        assert_eq!(imports_state(Some(3), out), Imports::Stale(vec!["Paper.Lengths".into()]));
+        assert_eq!(imports_state(Some(1), "error: unknown module `No.Such`\n"), Imports::Unknown("error: unknown module `No.Such`".into()));
+        assert_eq!(imports_state(None, ""), Imports::Unknown("no output".into()));
+
+        let project = Path::new("/x/proj");
+        assert_eq!(build_warning("base", project, &Imports::UpToDate), None);
+        let w = build_warning("base", project, &Imports::Stale(vec!["Paper.Lengths".into()])).unwrap();
+        assert!(w.contains("lake would build 1 module(s) in /x/proj again") && w.contains("for example Paper.Lengths"), "{w}");
+        assert!(build_warning("change", project, &Imports::Unknown("x".into())).unwrap().contains("could not ask lake"));
+        // No timed file exists on this side: nothing to ask, and nothing is run.
+        assert_eq!(ask_lake(Path::new("/nonexistent"), &["A.lean".to_string()].into()), Imports::UpToDate);
     }
 
     #[test]

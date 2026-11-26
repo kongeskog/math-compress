@@ -4,13 +4,13 @@
     {
       "login": "kongeskog",
       "role": "leader",
-      "since": "2026-11-21T07:06:02.158Z",
+      "since": "2026-11-21T18:06:20.262Z",
       "by": []
     },
     {
       "login": "mira-k",
       "role": "leader",
-      "since": "2026-11-25T01:06:02.158Z",
+      "since": "2026-11-25T12:06:20.262Z",
       "by": [
         "kongeskog"
       ]
@@ -18,7 +18,7 @@
     {
       "login": "ana-rios",
       "role": "ideator",
-      "since": "2026-11-23T09:06:02.158Z",
+      "since": "2026-11-23T20:06:20.262Z",
       "by": [
         "kongeskog"
       ]
@@ -26,7 +26,7 @@
     {
       "login": "okabe-r",
       "role": "ideator",
-      "since": "2026-11-24T14:06:02.158Z",
+      "since": "2026-11-25T01:06:20.262Z",
       "by": [
         "kongeskog",
         "mira-k"
@@ -35,7 +35,7 @@
     {
       "login": "lean-otter",
       "role": "ideator",
-      "since": "2026-11-24T00:06:02.158Z",
+      "since": "2026-11-24T11:06:20.262Z",
       "by": [
         "kongeskog"
       ]
@@ -46,7 +46,7 @@
       "issue": 131,
       "login": "qfwd",
       "role": "ideator",
-      "opened_at": "2026-11-26T04:06:02.158Z",
+      "opened_at": "2026-11-26T15:06:20.262Z",
       "status": "open",
       "endorsements": [],
       "needed": 1,
@@ -58,7 +58,7 @@
       "issue": 118,
       "login": "tobiasz",
       "role": "ideator",
-      "opened_at": "2026-11-24T15:06:02.158Z",
+      "opened_at": "2026-11-25T02:06:20.262Z",
       "status": "granted",
       "endorsements": [
         "kongeskog"

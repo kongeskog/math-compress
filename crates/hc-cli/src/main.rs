@@ -220,8 +220,9 @@ enum Cmd {
     /// Nothing is built. Each file is compiled against the other files of its
     /// own checkout as they were last built, so build both checkouts first
     /// (`lake build` in the project directory); the command stops when a
-    /// checkout has no `.lake/build` and warns when modules are older than
-    /// their sources. A file that does not compile cannot be timed and makes
+    /// checkout has no `.lake/build` and warns when lake would rebuild what
+    /// the timed files import (lake is asked, and it goes by content, not by
+    /// file times). A file that does not compile cannot be timed and makes
     /// the exit code non-zero; being over the limit does not (timings are
     /// noisy, and no gate enforces the limit).
     Time {

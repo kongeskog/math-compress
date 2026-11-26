@@ -2064,7 +2064,7 @@ format!(
 
     /// Whether `number` is an open issue in the ideas queue.
     fn open_idea(&self, issues: &[IssueInfo], number: u64) -> bool {
-        issues.iter().any(|i| i.number == number && i.open && i.labels.iter().any(|l| *l == self.cfg.ideas.label))
+        issues.iter().any(|i| i.number == number && i.open && i.labels.contains(&self.cfg.ideas.label))
     }
 
     /// Verify `pr` on today's main with the approved changes ahead of it

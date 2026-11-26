@@ -46,10 +46,10 @@
       }
     ]
   },
-  "updated_at": "2026-11-26T07:06:02.158Z",
+  "updated_at": "2026-11-26T18:06:20.262Z",
   "baseline": {
     "sha": "765c37a769f54cf20bd0ed69a0f25873c7089dfe",
-    "at": "2026-11-21T07:06:02.158Z",
+    "at": "2026-11-21T18:06:20.262Z",
     "metrics": {
       "tokens": 928161,
       "loc": 58797,
@@ -61,7 +61,7 @@
   },
   "current": {
     "sha": "27647689a6408bb23a4788a164fdaff4f2bab74a",
-    "at": "2026-11-25T17:30:57.955Z",
+    "at": "2026-11-26T04:31:16.059Z",
     "metrics": {
       "tokens": 887820,
       "loc": 55797,
@@ -152,7 +152,7 @@
       "lease_expires": null,
       "pr": 13,
       "result_delta": -1290,
-      "created_at": "2026-11-23T14:35:27.880Z",
+      "created_at": "2026-11-24T01:35:45.984Z",
       "url": "https://github.com/kongeskog/formal-math/issues/100"
     },
     {
@@ -166,7 +166,7 @@
       "lease_expires": null,
       "pr": 54,
       "result_delta": -964,
-      "created_at": "2026-11-24T00:49:17.570Z",
+      "created_at": "2026-11-24T11:49:35.674Z",
       "url": "https://github.com/kongeskog/formal-math/issues/101"
     },
     {
@@ -177,10 +177,10 @@
       "status": "claimed",
       "author": "pnkfelix2",
       "claimed_by": "mira-k",
-      "lease_expires": "2026-11-26T08:41:02.158Z",
+      "lease_expires": "2026-11-26T19:41:20.262Z",
       "pr": 61,
       "result_delta": null,
-      "created_at": "2026-11-22T06:41:52.926Z",
+      "created_at": "2026-11-22T17:42:11.030Z",
       "url": "https://github.com/kongeskog/formal-math/issues/102"
     },
     {
@@ -191,10 +191,10 @@
       "status": "claimed",
       "author": "pnkfelix2",
       "claimed_by": "okabe-r",
-      "lease_expires": "2026-11-26T07:28:02.158Z",
+      "lease_expires": "2026-11-26T18:28:20.262Z",
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-22T22:10:26.513Z",
+      "created_at": "2026-11-23T09:10:44.617Z",
       "url": "https://github.com/kongeskog/formal-math/issues/103"
     },
     {
@@ -208,7 +208,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-22T00:55:56.124Z",
+      "created_at": "2026-11-22T11:56:14.228Z",
       "url": "https://github.com/kongeskog/formal-math/issues/104"
     },
     {
@@ -222,7 +222,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-23T15:13:06.713Z",
+      "created_at": "2026-11-24T02:13:24.817Z",
       "url": "https://github.com/kongeskog/formal-math/issues/105"
     },
     {
@@ -236,7 +236,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-23T02:04:13.734Z",
+      "created_at": "2026-11-23T13:04:31.838Z",
       "url": "https://github.com/kongeskog/formal-math/issues/106"
     },
     {
@@ -250,7 +250,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-21T22:27:39.968Z",
+      "created_at": "2026-11-22T09:27:58.072Z",
       "url": "https://github.com/kongeskog/formal-math/issues/107"
     },
     {
@@ -264,7 +264,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-24T09:44:25.713Z",
+      "created_at": "2026-11-24T20:44:43.817Z",
       "url": "https://github.com/kongeskog/formal-math/issues/108"
     },
     {
@@ -278,7 +278,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-22T11:39:12.530Z",
+      "created_at": "2026-11-22T22:39:30.634Z",
       "url": "https://github.com/kongeskog/formal-math/issues/109"
     },
     {
@@ -292,7 +292,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-21T16:23:13.558Z",
+      "created_at": "2026-11-22T03:23:31.662Z",
       "url": "https://github.com/kongeskog/formal-math/issues/110"
     },
     {
@@ -306,7 +306,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-24T00:48:28.718Z",
+      "created_at": "2026-11-24T11:48:46.822Z",
       "url": "https://github.com/kongeskog/formal-math/issues/111"
     },
     {
@@ -320,7 +320,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-23T21:32:20.940Z",
+      "created_at": "2026-11-24T08:32:39.044Z",
       "url": "https://github.com/kongeskog/formal-math/issues/112"
     },
     {
@@ -334,7 +334,7 @@
       "lease_expires": null,
       "pr": null,
       "result_delta": null,
-      "created_at": "2026-11-21T22:02:39.846Z",
+      "created_at": "2026-11-22T09:02:57.950Z",
       "url": "https://github.com/kongeskog/formal-math/issues/113"
     }
   ],
@@ -348,7 +348,7 @@
       "head_sha": "b1a3996cc8e98075c8dc59ee4980a0f42f501776",
       "base_sha": "27647689a6408bb23a4788a164fdaff4f2bab74a",
       "status": "needs_fix",
-      "created_at": "2026-11-26T05:22:02.158Z",
+      "created_at": "2026-11-26T16:22:20.262Z",
       "decided_at": null,
       "metrics": {
         "tokens": 887078,
@@ -405,7 +405,7 @@
         },
         {
           "key": "comments",
-          "label": "Added comments within limits",
+          "label": "Added text within limits",
           "status": "skip"
         },
         {
@@ -444,7 +444,7 @@
       "head_sha": "ccd42db4587941c5041f110ce4f04b369f9a0ff1",
       "base_sha": "27647689a6408bb23a4788a164fdaff4f2bab74a",
       "status": "verifying",
-      "created_at": "2026-11-26T05:48:02.158Z",
+      "created_at": "2026-11-26T16:48:20.262Z",
       "decided_at": null,
       "metrics": {
         "tokens": 887502,
@@ -501,7 +501,7 @@
         },
         {
           "key": "comments",
-          "label": "Added comments within limits",
+          "label": "Added text within limits",
           "status": "pass"
         },
         {
@@ -540,7 +540,7 @@
       "head_sha": "a3e18b184ef5bc54c5e49c5e218523e6eb5a58ec",
       "base_sha": "27647689a6408bb23a4788a164fdaff4f2bab74a",
       "status": "stale",
-      "created_at": "2026-11-26T06:14:02.158Z",
+      "created_at": "2026-11-26T17:14:20.262Z",
       "decided_at": null,
       "metrics": {
         "tokens": 886530,
@@ -597,7 +597,7 @@
         },
         {
           "key": "comments",
-          "label": "Added comments within limits",
+          "label": "Added text within limits",
           "status": "pass"
         },
         {
@@ -636,7 +636,7 @@
       "head_sha": "74f52037053888a745cc69621e0a4b1d3e44d930",
       "base_sha": "27647689a6408bb23a4788a164fdaff4f2bab74a",
       "status": "verifying",
-      "created_at": "2026-11-26T06:40:02.158Z",
+      "created_at": "2026-11-26T17:40:20.262Z",
       "decided_at": null,
       "metrics": null,
       "base_metrics": null,

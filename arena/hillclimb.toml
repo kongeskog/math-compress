@@ -46,7 +46,9 @@ guards = [
 ]
 
 # Whether a change needs the approval of someone other than its author before
-# it merges. 0: none, a change whose gates all pass merges (the default). Set
+# it merges. 0 and 0, as here: none, a change whose gates all pass merges. A
+# file without this section requires approvals (1, and 2 for large changes),
+# and each key that is left out has that default, so state both. Set
 # `required = 1` to have every change read by a vetted reviewer first, or only
 # `required_large` to have changes of more than `large_change_files` files
 # read. In every setting a `/request-changes` from a leader (or a vetted
