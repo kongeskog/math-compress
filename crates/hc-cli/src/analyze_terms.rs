@@ -87,10 +87,29 @@ pub struct TermsOptions {
     pub compare: Option<PathBuf>,
 }
 
-fn print_changes(title: &str, v: &[(String, i128, i64)], top: usize) {
+/// A one-line reading of a change in tokens and term size.
+pub fn verdict(term: i128, tokens: i64) -> &'static str {
+    match (tokens.signum(), term.signum()) {
+        (-1, 1) => "fewer tokens, larger terms",
+        (-1, -1) => "fewer tokens, smaller terms",
+        (-1, 0) => "fewer tokens, same terms",
+        (1, 1) => "more tokens, larger terms",
+        (1, -1) => "more tokens, smaller terms",
+        (1, 0) => "more tokens, same terms",
+        (0, 1) => "same tokens, larger terms",
+        (0, -1) => "same tokens, smaller terms",
+        _ => "unchanged",
+    }
+}
+
+fn print_changes(title: &str, v: &[(String, i128, i64)], top: usize, tokens: bool) {
     println!("\n{title} ({} changed): term nodes, tokens", v.len());
     for (k, d, t) in v.iter().take(top) {
-        println!("{d:>+12} {t:>+8}  {k}");
+        if tokens {
+            println!("{d:>+12} {t:>+8}  {k}  ({})", verdict(*d, *t));
+        } else {
+            println!("{d:>+12} {:>8}  {k}", "?");
+        }
     }
 }
 
@@ -166,9 +185,12 @@ fn compare(old: &[Row], new: &[Row], top: usize) {
     let (od, nd) = (decls(old), decls(new));
     let dt: i128 = nd.values().map(|x| x.0 as i128).sum::<i128>() - od.values().map(|x| x.0 as i128).sum::<i128>();
     let tt: i64 = nd.values().map(|x| x.1 as i64).sum::<i64>() - od.values().map(|x| x.1 as i64).sum::<i64>();
-    println!("\nCompared with the earlier run: {dt:+} term nodes, {tt:+} tokens (tokens only if both runs carry them).");
-    print_changes("Modules", &changes(&mods(old), &mods(new)), top);
-    print_changes("Declarations", &changes(&od, &nd), top);
+    println!("\nCompared with the earlier run: {dt:+} term nodes, {tt:+} tokens: {}.", verdict(dt, tt));
+    let tokens = old.iter().all(|r| r.tokens.is_some()) && new.iter().all(|r| r.tokens.is_some());
+    let mut per_file = changes(&mods(old), &mods(new));
+    per_file.sort_by(|a, b| a.0.cmp(&b.0));
+    print_changes("Files", &per_file, usize::MAX, tokens);
+    print_changes("Declarations", &changes(&od, &nd), top, tokens);
 }
 
 fn write_out(p: &Path, stdout: &str, rows: &[Row]) -> Result<()> {
@@ -205,5 +227,8 @@ mod tests {
         assert_eq!(c[0], ("A.f".to_string(), 60, -18));
         assert_eq!(c[1], ("B.g".to_string(), -24, -9));
         assert_eq!(c[2], ("C.h".to_string(), 2, 1));
+        assert_eq!(verdict(60, -18), "fewer tokens, larger terms");
+        assert_eq!(verdict(-5, -1), "fewer tokens, smaller terms");
+        assert_eq!(verdict(0, 0), "unchanged");
     }
 }

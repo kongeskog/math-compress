@@ -162,6 +162,7 @@ hc analyze tails Nc/A.lean   # steps after which one closing tactic proves the r
 hc analyze flat   # single-caller lemmas and their trees, arguments constant at every call, facts proved in several places
 hc analyze weight # the source tokens each declaration alone holds up (dominators), as a ranked list and an outline
 hc analyze terms  # kernel term size per declaration and module beside tokens; --compare an earlier --out
+hc analyze seams  # what lemma boundaries hide: unread parts of a conclusion, restated or undone results, carried hypotheses, repeated case splits and haves
 # hc analyze compiles its Lean programs natively once (cached in ~/.cache/hc); HC_LEAN_NATIVE=0 runs them with `lean --run`
 ```
 

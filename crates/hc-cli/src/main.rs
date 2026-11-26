@@ -1,6 +1,7 @@
 mod analyze;
 mod analyze_flat;
 mod analyze_more;
+mod analyze_seams;
 mod analyze_terms;
 mod analyze_weight;
 mod gh;
@@ -304,6 +305,22 @@ enum AnalyzeTool {
     /// Kernel term sizes of the project's declarations, per declaration, module and project,
     /// beside their source tokens; `--compare` an earlier `--out` file.
     Terms(TermsArgs),
+    /// What lemma boundaries hide: parts of a conclusion the one caller does not read, a
+    /// conclusion restated or undone at its call, hypotheses only passed on, repeated case
+    /// splits and repeated `have`s, lemmas that only dispatch, and repeated facts.
+    Seams(SeamsArgs),
+}
+
+#[derive(clap::Args)]
+struct SeamsArgs {
+    #[command(flatten)]
+    common: AnalyzeArgs,
+    /// Skip subproofs with fewer expression nodes when comparing case-split skeletons.
+    #[arg(long, default_value_t = 40)]
+    min_size: usize,
+    /// Most constants in which statements with the same skeleton may differ.
+    #[arg(long, default_value_t = 2)]
+    max_diff: usize,
 }
 
 #[derive(clap::Args)]
@@ -488,6 +505,19 @@ fn main() -> Result<()> {
                         max_diff: t.max_diff,
                         min_size: t.min_size,
                         everywhere: t.everywhere,
+                    });
+                }
+                AnalyzeTool::Seams(t) => {
+                    let a = t.common;
+                    return analyze_seams::seams(analyze_seams::SeamsOptions {
+                        root: a.root,
+                        config: a.config,
+                        imports: a.imports,
+                        theorems: a.theorems,
+                        out: a.out,
+                        top: a.top,
+                        min_size: t.min_size,
+                        max_diff: t.max_diff,
                     });
                 }
                 AnalyzeTool::Terms(t) => {

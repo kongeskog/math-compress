@@ -163,10 +163,10 @@ structure ArgInfo where
   calls : Nat := 0
   escapes : Bool := false
 
-/-- A proposition: a `∀` or an application of a constant whose type ends in `Prop`. -/
-def looksProp (env : Environment) (t : Expr) : Bool :=
+/-- A proposition: an application of a constant whose type ends in `Prop`, under `∀`s. -/
+partial def looksProp (env : Environment) (t : Expr) : Bool :=
   match t.consumeMData with
-  | .forallE .. => true
+  | .forallE _ _ b _ => looksProp env b
   | e =>
     match e.getAppFn with
     | .const c _ =>
@@ -203,6 +203,42 @@ def fingerprint (t : Expr) (types : List Expr) : Expr :=
     mkApp2 (mkConst varHole) (mkRawNatLit ((ids.idxOf? i).getD 0))
       (if ty.hasLooseBVars then mkConst varHole else ty)
   t.instantiate subst
+
+/-- Pretty-print a fingerprint: each placeholder becomes a local `x₀`, `x₁`, … of its type. -/
+partial def ppFact (fp : Expr) : MetaM String := do
+  let mut holes : Array (Nat × Expr) := #[]
+  let mut todo := #[fp]
+  let mut seen : Std.HashSet Expr := {}
+  while !todo.isEmpty do
+    let e := todo.back!
+    todo := todo.pop
+    if seen.contains e then continue
+    seen := seen.insert e
+    if e.isAppOfArity varHole 2 then
+      if let .lit (.natVal k) := e.appFn!.appArg! then
+        unless holes.any (·.1 == k) do holes := holes.push (k, e.appArg!)
+      continue
+    match e with
+    | .app f a => todo := todo.push f |>.push a
+    | .lam _ t b _ | .forallE _ t b _ => todo := todo.push t |>.push b
+    | .letE _ t v b _ => todo := todo.push t |>.push v |>.push b
+    | .mdata _ b | .proj _ _ b => todo := todo.push b
+    | _ => pure ()
+  let sorted := holes.qsort (·.1 < ·.1)
+  let rec go (i : Nat) (fvs : Array (Nat × Expr)) : MetaM String := do
+    if h : i < sorted.size then
+      let (k, ty) := sorted[i]
+      let ty := if ty.isConstOf varHole then mkSort levelOne else ty
+      withLocalDeclD (Name.mkSimple s!"x{k}") ty fun x => go (i + 1) (fvs.push (k, x))
+    else
+      let e := fp.replace fun e =>
+        if e.isAppOfArity varHole 2 then
+          match e.appFn!.appArg! with
+          | .lit (.natVal k) => (fvs.find? (·.1 == k)).map (·.2)
+          | _ => none
+        else none
+      return toString (← ppExpr e)
+  go 0 #[]
 
 def trivialProof (v : Expr) : Bool :=
   v.consumeMData.isConst ||
@@ -383,9 +419,8 @@ def run (o : Opts) (imports roots : Array Name) : IO Unit := do
     let mut nPairs := 0
     for (fp, members) in groups do
       g := g + 1
-      let txt ← try pure (toString (← ppExpr fp)) catch _ => pure (toString fp)
+      let txt ← try ppFact fp catch _ => pure (toString fp)
       let txt := " ".intercalate (txt.split (· == '\n') |>.toList.map (·.trimAscii.toString))
-      let txt := (txt.replace "_flat_var" "·")
       let txt := if txt.length > 160 then (txt.take 160).toString ++ " …" else txt
       for (d, sz, nm) in members do
         let (a, b) ← range d

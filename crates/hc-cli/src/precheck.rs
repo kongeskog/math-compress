@@ -279,6 +279,45 @@ pub fn count_warnings(body: &str, files_changed: usize) -> Vec<String> {
     out
 }
 
+/// Files of the project a description names: paths ending in `.lean`, and backticked
+/// `Folder/File` forms that are a known file with `.lean` added. Returned as repository paths.
+pub fn described_files(body: &str, known: &[&str], prefix: &str) -> BTreeSet<String> {
+    let resolve = |w: &str| -> Option<String> {
+        let w = w.strip_suffix(".lean").unwrap_or(w);
+        if w.is_empty() || !w.contains('/') {
+            return None;
+        }
+        [format!("{w}.lean"), format!("{prefix}{w}.lean")].into_iter().find(|c| known.contains(&c.as_str()))
+    };
+    let mut out = BTreeSet::new();
+    let re = Regex::new(r"`([A-Za-z0-9_./-]+)`|([A-Za-z0-9_./-]+\.lean)\b").unwrap();
+    for c in re.captures_iter(body) {
+        let w = c.get(1).or_else(|| c.get(2)).map(|m| m.as_str()).unwrap_or("");
+        if c.get(1).is_some() && !w.ends_with(".lean") && !w.contains('/') {
+            continue;
+        }
+        if let Some(f) = resolve(w) {
+            out.insert(f);
+        }
+    }
+    out
+}
+
+/// A warning when the description names files of the project and none of them is changed:
+/// usually a description written for another change.
+pub fn described_files_warning(body: &str, known: &[&str], changed: &[String], prefix: &str) -> Option<String> {
+    let named = described_files(body, known, prefix);
+    if named.is_empty() || named.iter().any(|f| changed.contains(f)) {
+        return None;
+    }
+    let shown: Vec<&str> = named.iter().take(5).map(String::as_str).collect();
+    Some(format!(
+        "the description names {} file(s) of the project ({}), none of which this change touches: is it the description of another change?",
+        named.len(),
+        shown.join(", ")
+    ))
+}
+
 fn git_diff(a: &Path, b: &Path) -> String {
     Command::new("git")
         .args(["diff", "--no-index", "--no-color", "-U0", "--"])
@@ -481,6 +520,11 @@ pub fn run(head: &Path, c: &Compared, o: &Options) -> Result<bool> {
                     }
                     _ => {}
                 }
+                let known: Vec<&str> = head_files.iter().chain(base_files.iter()).copied().collect();
+                if let Some(w) = described_files_warning(&body, &known, &changed, &cfg.dir_prefix()) {
+                    warnings += 1;
+                    println!("  [warn ] {w}");
+                }
                 for w in count_warnings(&body, changed.len()) {
                     warnings += 1;
                     println!("  [warn ] {w}");
@@ -600,6 +644,22 @@ noncomputable def outer := 2
         // A bullet in a doc comment is not code.
         assert_eq!(line_issues("  * a list item", "", 100), []);
         assert_eq!(line_issues("  · simp", "· simp", 100), []);
+    }
+
+    #[test]
+    fn description_naming_other_files() {
+        let known = ["vp-vnp/Nc/Tow/Ok.lean", "vp-vnp/Paper/Groups.lean", "vp-vnp/Paper/Fan.lean"];
+        let body = "This change flattens clusters in `Paper/Groups` and `Paper/Fan`; see also Nc/Tow/Ok.lean.";
+        let named = described_files(body, &known, "vp-vnp/");
+        assert_eq!(named.len(), 3);
+        // The pull request changes only Ok.lean of another cluster: fine, one named file is changed.
+        assert!(described_files_warning(body, &known, &["vp-vnp/Nc/Tow/Ok.lean".into()], "vp-vnp/").is_none());
+        // Opened with another change's description: nothing it names is in the diff.
+        let other = "Flattens `Paper/Groups` and `Paper/Fan`, re-cuts them.";
+        let w = described_files_warning(other, &known, &["vp-vnp/Nc/Tow/Load3.lean".into()], "vp-vnp/");
+        assert!(w.unwrap().contains("none of which"));
+        // A description that names no file of the project gives no warning.
+        assert!(described_files_warning("Shorter proofs in `Nc/Tow`.", &known, &[], "vp-vnp/").is_none());
     }
 
     #[test]
