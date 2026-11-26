@@ -144,7 +144,7 @@ impl Conduct {
             return "Do not add `attribute [local simp]` (or other attributes that change what automation does) or hypotheses with a default proof to save tokens.".to_string();
         }
         format!(
-            "A file may tune automation for its own proofs under these conditions: a lemma becomes `attribute [local simp]` only if it is passed to `simp` at least {} times in that file, with at most {} such lines in a file, each next to the lemma or in one block at the top of its section with a comment saying what the set is for; a hypothesis gets a default proof (`(h : p := by tac)`) only if most callers discharge it by that same tactic; never a global attribute, never a change to an instance priority or to the library's simp set, and the file may not compile slower than the limit above.",
+            "A file may tune automation for its own proofs under these conditions. A lemma becomes `attribute [local simp]` only if it occurs at least {} times in `simp`/`simpa` lists (not `simp only`) of that file on the base branch; at most {} lemmas per file; the attribute sits in a `section` that ends where its use ends (or `attribute [local simp] … in` for one declaration), with a comment that says what the set is for and is true of its whole scope; a call that switches a local simp lemma off (`simp [-foo]`) says why in a comment. A hypothesis gets a default proof (`(h : p := by tac)`) only if most call sites on the base branch discharge it by that same tactic, and the lemma's doc comment says which hypothesis has a default. Never a global attribute, never a change to an instance priority or to the library's simp set, and the file may not compile slower than the limit above.",
             la.min_uses, la.max_local_simp_per_file
         )
     }
@@ -179,7 +179,7 @@ impl Conduct {
         let la = &self.local_automation;
         if la.enabled {
             out.push_str(&format!(
-                "\n- Automation tuned per file outside its conditions: a local simp lemma used fewer than {} times, more than {} such lines in a file, a global attribute, a changed instance priority, a lemma erased from the library's simp set, or a default proof that most callers would not have written.",
+                "\n- Automation tuned per file outside its conditions: a local simp lemma with fewer than {} occurrences in the file's `simp`/`simpa` lists on the base branch (count them), more than {} such lemmas in a file, an attribute whose scope runs past what its comment says (it lasts to the end of its section or file), a switched-off lemma without a comment, a global attribute, a changed instance priority, a lemma erased from the library's simp set, a default proof that most call sites on the base branch did not write, or a changed signature without a doc comment naming the default.",
                 la.min_uses, la.max_local_simp_per_file
             ));
         } else {
@@ -557,7 +557,7 @@ mod tests {
         assert!(c.reviewer_bullets().contains("default proof"));
         assert!(c.local_rule().starts_with("Do not add"));
         c.local_automation.enabled = true;
-        assert!(c.local_rule().contains("at least 3 times"));
+        assert!(c.local_rule().contains("at least 3 times in `simp`"));
         assert!(c.reviewer_bullets().contains("outside its conditions"));
         let parsed: Conduct = toml::from_str("[search_tactics]\nenabled = true\nmin_saving = 40").unwrap();
         assert!(parsed.search_tactics.enabled);
