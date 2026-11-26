@@ -18,8 +18,85 @@ pub const TAILS_LEAN: &str = include_str!("../../../tools/lean/Tails.lean");
 /// arena does not allow search tactics such as `grind`.
 pub const SPECIFIC_TACTICS: &[&str] = &["omega", "simp", "linarith", "positivity", "norm_num", "ring"];
 
-/// Write `source` to a temporary `name` and run `lake env lean --run <file> <args>` in `project`.
-fn run_lean(name: &str, source: &str, project: &Path, args: &[String]) -> Result<(String, f64)> {
+/// Compile `source` to a native program with the project's toolchain, once per source and
+/// toolchain, cached under `$XDG_CACHE_HOME/hc` (or `~/.cache/hc`). `None` when that fails.
+pub fn native_program(name: &str, source: &str, project: &Path) -> Option<PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let prefix = Command::new("lake").args(["env", "lean", "--print-prefix"]).current_dir(project).output().ok()?;
+    if !prefix.status.success() {
+        return None;
+    }
+    let prefix = PathBuf::from(String::from_utf8_lossy(&prefix.stdout).trim());
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (source, prefix.display().to_string()).hash(&mut h);
+    let stem = name.trim_end_matches(".lean");
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?
+        .join("hc")
+        .join(format!("{stem}-{:016x}", h.finish()));
+    let exe = cache.join(stem.to_lowercase());
+    if exe.is_file() {
+        return Some(exe);
+    }
+    // Build in a directory of this process, then move it into place, so that two runs at the
+    // same time never use a half-written program.
+    let work = cache.with_extension(format!("tmp{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).ok()?;
+    std::fs::write(work.join(name), source).ok()?;
+    let c = work.join(format!("{stem}.c"));
+    let built = work.join(stem.to_lowercase());
+    let ok = Command::new(prefix.join("bin/lean"))
+        .arg(format!("--root={}", work.display()))
+        .arg("-c")
+        .arg(&c)
+        .arg(work.join(name))
+        .stdout(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+        && Command::new(prefix.join("bin/leanc"))
+            .args(["-O2", "-rdynamic", "-o"])
+            .arg(&built)
+            .arg(&c)
+            .stdout(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    if ok && built.is_file() && (std::fs::rename(&work, &cache).is_ok() || exe.is_file()) {
+        let _ = std::fs::remove_dir_all(&work);
+        return exe.is_file().then_some(exe);
+    }
+    let _ = std::fs::remove_dir_all(&work);
+    None
+}
+
+/// Run the Lean program `source` (named `name`) inside `project` with `args`. By default it is
+/// compiled natively first (see `native_program`), which is many times faster; when that fails,
+/// or when `HC_LEAN_NATIVE=0` is set, it runs under `lake env lean --run`.
+pub fn run_lean(name: &str, source: &str, project: &Path, args: &[String]) -> Result<(String, f64)> {
+    let native = std::env::var("HC_LEAN_NATIVE").map(|v| v != "0").unwrap_or(true);
+    if native {
+        match native_program(name, source, project) {
+            Some(exe) => {
+                let start = Instant::now();
+                let output = Command::new("lake")
+                    .arg("env")
+                    .arg(&exe)
+                    .args(args)
+                    .current_dir(project)
+                    .stderr(Stdio::inherit())
+                    .output()
+                    .with_context(|| format!("running {} in {}", exe.display(), project.display()))?;
+                if !output.status.success() {
+                    bail!("{name} failed ({}); is the project built (`lake build`)?", output.status);
+                }
+                return Ok((String::from_utf8_lossy(&output.stdout).into_owned(), start.elapsed().as_secs_f64()));
+            }
+            None => eprintln!("Could not compile {name} natively; running it under `lean --run` (slower)."),
+        }
+    }
     let dir = std::env::temp_dir().join(format!("hc-analyze-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let file = dir.join(name);
@@ -41,7 +118,7 @@ fn run_lean(name: &str, source: &str, project: &Path, args: &[String]) -> Result
     Ok((String::from_utf8_lossy(&output.stdout).into_owned(), start.elapsed().as_secs_f64()))
 }
 
-fn tokens_of_lines(cache: &mut BTreeMap<String, Vec<lexer::Token>>, project: &Path, module: &str, a: usize, b: usize) -> usize {
+pub fn tokens_of_lines(cache: &mut BTreeMap<String, Vec<lexer::Token>>, project: &Path, module: &str, a: usize, b: usize) -> usize {
     let toks = cache.entry(module.to_string()).or_insert_with(|| {
         std::fs::read_to_string(project.join(module_path(module))).map(|s| lexer::tokenize(&s)).unwrap_or_default()
     });

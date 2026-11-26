@@ -10,8 +10,7 @@ use hc_core::config::Config;
 use hc_core::lexer;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::Instant;
+use std::process::Command;
 
 pub const REACH_LEAN: &str = include_str!("../../../tools/lean/Reach.lean");
 pub const UNUSED_LEAN: &str = include_str!("../../../tools/lean/Unused.lean");
@@ -209,24 +208,10 @@ pub fn run_tool(tool: Tool, project: &Path, imports: &[String], roots: &[String]
     if imports.is_empty() {
         bail!("no modules to import; pass --import");
     }
-    let dir = std::env::temp_dir().join(format!("hc-analyze-{}", std::process::id()));
-    std::fs::create_dir_all(&dir)?;
-    let file = dir.join(tool.file_name());
-    std::fs::write(&file, tool.source())?;
-    let start = Instant::now();
-    let output = Command::new("lake")
-        .args(lake_args(&file, imports, roots))
-        .current_dir(project)
-        .stderr(Stdio::inherit())
-        .output()
-        .with_context(|| format!("running `lake env lean --run` in {}", project.display()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let output = output?;
-    let seconds = start.elapsed().as_secs_f64();
-    if !output.status.success() {
-        bail!("{} failed ({}); is the project built (`lake build`)?", tool.file_name(), output.status);
-    }
-    Ok(Run { stdout: String::from_utf8_lossy(&output.stdout).into_owned(), seconds })
+    // The program's own arguments: what follows `env lean --run <file>`.
+    let args = lake_args(Path::new(tool.file_name()), imports, roots).split_off(4);
+    let (stdout, seconds) = crate::analyze_more::run_lean(tool.file_name(), tool.source(), project, &args)?;
+    Ok(Run { stdout, seconds })
 }
 
 pub struct Options {

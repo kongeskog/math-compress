@@ -1,5 +1,8 @@
 mod analyze;
+mod analyze_flat;
 mod analyze_more;
+mod analyze_terms;
+mod analyze_weight;
 mod gh;
 mod landing;
 mod ops;
@@ -292,6 +295,46 @@ enum AnalyzeTool {
     /// Hits are upper bounds: about half of such tokens were realized in the first arena, some
     /// hits fail once the text is replaced, and compile time is not measured (use `hc time`).
     Tails(TailsArgs),
+    /// Single-caller lemmas and their trees, arguments that are the same at every call, and
+    /// facts proved in several declarations: boundaries a flatter proof could remove.
+    Flat(FlatArgs),
+    /// Dominator weights: the source tokens each declaration alone holds up (what would become
+    /// unreachable without it), and an outline of the proof by weight.
+    Weight(WeightArgs),
+    /// Kernel term sizes of the project's declarations, per declaration, module and project,
+    /// beside their source tokens; `--compare` an earlier `--out` file.
+    Terms(TermsArgs),
+}
+
+#[derive(clap::Args)]
+struct TermsArgs {
+    #[command(flatten)]
+    common: AnalyzeArgs,
+    /// An earlier `--out` file to compare with.
+    #[arg(long)]
+    compare: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+struct WeightArgs {
+    #[command(flatten)]
+    common: AnalyzeArgs,
+    /// Also recompute reachability without this declaration and compare with what it dominates
+    /// (repeatable).
+    #[arg(long = "check")]
+    checks: Vec<String>,
+}
+
+#[derive(clap::Args)]
+struct FlatArgs {
+    #[command(flatten)]
+    common: AnalyzeArgs,
+    /// Skip facts whose statement or subproof has fewer expression nodes.
+    #[arg(long, default_value_t = 12)]
+    min_size: usize,
+    /// Report constant arguments only for theorems applied at least this often.
+    #[arg(long, default_value_t = 2)]
+    min_calls: usize,
 }
 
 #[derive(clap::Args)]
@@ -445,6 +488,43 @@ fn main() -> Result<()> {
                         max_diff: t.max_diff,
                         min_size: t.min_size,
                         everywhere: t.everywhere,
+                    });
+                }
+                AnalyzeTool::Terms(t) => {
+                    let a = t.common;
+                    return analyze_terms::terms(analyze_terms::TermsOptions {
+                        root: a.root,
+                        config: a.config,
+                        imports: a.imports,
+                        theorems: a.theorems,
+                        out: a.out,
+                        top: a.top,
+                        compare: t.compare,
+                    });
+                }
+                AnalyzeTool::Weight(t) => {
+                    let a = t.common;
+                    return analyze_weight::weight(analyze_weight::WeightOptions {
+                        root: a.root,
+                        config: a.config,
+                        imports: a.imports,
+                        theorems: a.theorems,
+                        out: a.out,
+                        top: a.top,
+                        checks: t.checks,
+                    });
+                }
+                AnalyzeTool::Flat(t) => {
+                    let a = t.common;
+                    return analyze_flat::flat(analyze_flat::FlatOptions {
+                        root: a.root,
+                        config: a.config,
+                        imports: a.imports,
+                        theorems: a.theorems,
+                        out: a.out,
+                        top: a.top,
+                        min_size: t.min_size,
+                        min_calls: t.min_calls,
                     });
                 }
                 AnalyzeTool::Tails(t) => {
