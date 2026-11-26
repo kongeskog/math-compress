@@ -134,7 +134,8 @@ fn current_branch(head: &Path) -> String {
 pub fn run(head: &Path, c: &Compared, o: &Options) -> Result<bool> {
     let cfg = &c.cfg;
     println!("== hc eval\n");
-    let gates = hc_core::eval::static_gates(cfg, &c.base, &c.head)?;
+    // Every place, not the first few: this is where an author looks them up.
+    let gates = hc_core::eval::static_gates_naming(cfg, &c.base, &c.head, usize::MAX)?;
     let gates_ok = crate::report(c, &gates);
 
     let changed = hc_core::eval::changed_paths(&c.base, &c.head);
@@ -205,6 +206,10 @@ pub fn run(head: &Path, c: &Compared, o: &Options) -> Result<bool> {
                     LineIssue::TrailingSpace => {
                         padded += 1;
                         println!("  [ERROR] {p}:{n}: trailing whitespace");
+                    }
+                    LineIssue::Hidden(ch) => {
+                        padded += 1;
+                        println!("  [ERROR] {p}:{n}: a control character or one that does not show (U+{:04X})", ch as u32);
                     }
                     LineIssue::Break => {
                         warnings += 1;
@@ -307,7 +312,7 @@ pub fn run(head: &Path, c: &Compared, o: &Options) -> Result<bool> {
 
     let ok = gates_ok && definite == 0 && too_long == 0 && padded == 0 && format_ok;
     println!(
-        "\nprecheck: {}; static gates {}; {} mention(s) of deleted names in comments ({} in code or possible); {} added line(s) over {} characters, {} ending in whitespace; {} warning(s).",
+        "\nprecheck: {}; static gates {}; {} mention(s) of deleted names in comments ({} in code or possible); {} added line(s) over {} characters, {} ending in whitespace or with hidden characters; {} warning(s).",
         if ok { "OK" } else { "NOT READY" },
         if gates_ok { "pass" } else { "FAIL" },
         definite,

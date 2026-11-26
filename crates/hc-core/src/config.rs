@@ -138,12 +138,12 @@ impl Conduct {
         }
         if !st.enabled {
             return format!(
-                "Do not replace explicit steps by a tactic that searches for the proof ({}) to save tokens. Such a call already in the proof may stay. A gate checks it: the number of such calls may not rise in any file.",
+                "Do not replace explicit steps by a tactic that searches for the proof ({}) to save tokens. Such a call already in the proof may stay. A gate checks it: the number of such calls may not rise in any file, counting the forms with `?` and `!` (`grind?`, `simp_all!`) as the same tactic.",
                 self.tactic_list()
             );
         }
         format!(
-            "A tactic that searches for the proof ({}) may replace the end of a tactic block only if all of these hold: there are at most {} such calls in the file; the place saves at least {} tokens; the file takes at most {}% longer to compile; no specific tactic closes the goal at similar length; and a one-line comment at the place, on the same line or one of the two lines above, says what the removed lines used (where they were a chain of inequalities, the comment gives the intermediate bound and where the final constant comes from). A gate checks what can be counted: the number of calls in each file where it rose, and that the number of calls without a comment on their line or one of the two lines above does not rise in a file. The saving, the time and what the comment says are not checked by a machine.",
+            "A tactic that searches for the proof ({}) may replace the end of a tactic block only if all of these hold: there are at most {} such calls in the file; the place saves at least {} tokens; the file takes at most {}% longer to compile; no specific tactic closes the goal at similar length; and a one-line comment at the place, on the same line or one of the two lines above, says what the removed lines used (where they were a chain of inequalities, the comment gives the intermediate bound and where the final constant comes from). A gate checks what can be counted: the number of calls in each file where it rose, and that the number of calls without a comment on their line or one of the two lines above does not rise in a file. The forms with `!` count as the same tactic; the forms with `?` (`grind?`, `simp_all?`) are not allowed at all, since they print a suggestion on every build. The saving, the time and what the comment says are not checked by a machine.",
             self.tactic_list(),
             st.max_per_file,
             st.min_saving,
@@ -155,10 +155,10 @@ impl Conduct {
     pub fn local_rule(&self) -> String {
         let la = &self.local_automation;
         if !la.enabled {
-            return "Do not add `attribute [local simp]` (or other attributes that change what automation does) or hypotheses with a default proof to save tokens. A gate checks the attributes: the number of `attribute [local simp]` commands may not rise in any file, and neither may the number of global `attribute [simp]` commands, of lemmas erased from the simp set (`attribute [-simp]`) or of instance priorities.".to_string();
+            return "Do not add attributes that change what automation does, or hypotheses with a default proof, to save tokens. A gate checks the attributes, as a command (`attribute [local simp] foo`) and on a declaration (`@[local simp]`): in no file may the number rise of local simp attributes, of global simp attributes (`attribute [simp]`, a declaration marked `@[simp]`), of `scoped simp`, `local instance`, `scoped instance` or `grind` attributes, of lemmas erased from the simp set (`attribute [-simp]`), or of instance priorities. Pass a lemma to the `simp` calls that need it instead.".to_string();
         }
         format!(
-            "A file may tune automation for its own proofs under these conditions. A lemma becomes `attribute [local simp]` only if it occurs at least {} times in `simp`/`simpa` lists (not `simp only`) of that file on the base branch; at most {} `attribute [local simp]` commands per file; the attribute sits in a `section` or `namespace` that ends where its use ends (or is `attribute [local simp] … in` for one declaration), with a comment on the same line or one of the two lines above that says what the set is for and is true of its whole scope; a call that switches a local simp lemma off (`simp [-foo]`) says why in a comment. A hypothesis gets a default proof (`(h : p := by tac)`) only if most call sites on the base branch discharge it by that same tactic, and the lemma's doc comment says which hypothesis has a default. Never a global `attribute [simp]`, never an instance priority (`attribute [instance 100]`, `instance (priority := …)`), never a lemma erased from the simp set (`attribute [-simp]`), and the file may not compile slower than the limit above. A gate checks what can be counted: the number of `attribute [local simp]` commands in each file where it rose; that none is added without a comment, or outside a `section` or `namespace` block when it is not of the `… in` form; and that no global `attribute [simp]`, `attribute [-simp]` or instance priority is added. How often a lemma is used, default proofs and what the comments say are not checked by a machine.",
+            "A file may tune automation for its own proofs under these conditions. A lemma becomes `attribute [local simp]` only if it occurs at least {} times in `simp`/`simpa` lists (not `simp only`) of that file on the base branch; at most {} `attribute [local simp]` commands per file; the attribute sits in a `section` or `namespace` that ends where its use ends (or is `attribute [local simp] … in` for one declaration), with a comment on the same line or one of the two lines above that says what the set is for and is true of its whole scope; a call that switches a local simp lemma off (`simp [-foo]`) says why in a comment. A hypothesis gets a default proof (`(h : p := by tac)`) only if most call sites on the base branch discharge it by that same tactic, and the lemma's doc comment says which hypothesis has a default. Never a global simp attribute (`attribute [simp]`, or a new declaration marked `@[simp]`), never another attribute that tunes automation (`scoped simp`, `local instance`, `scoped instance`, `grind`), never an instance priority (`attribute [instance 100]`, `instance (priority := …)`), never a lemma erased from the simp set (`attribute [-simp]`), and the file may not compile slower than the limit above. A gate checks what can be counted: the number of local simp attributes in each file where it rose (`@[local simp]` on a declaration counts as `attribute [local simp]` does); that none is added without a comment, or outside a `section` or `namespace` block when it is not of the `… in` form; and that none of the attributes named as never allowed is added, nor an instance priority. How often a lemma is used, default proofs and what the comments say are not checked by a machine.",
             la.min_uses, la.max_local_simp_per_file
         )
     }
@@ -349,15 +349,21 @@ impl Format {
 pub struct Limits {
     /// Open pull requests one author may have being verified at once. Leaders are exempt.
     pub max_open_prs: usize,
-    /// How many characters of comments and string literals one change may
-    /// add, net, over all its files. Neither counts toward the score, so
-    /// without a limit a change could carry any amount of text. 0: no limit.
+    /// How many characters of comments, string literals and names in `«…»`
+    /// the lines a change adds may hold, over all its files. None of these
+    /// counts toward the score, so without a limit a change could carry any
+    /// amount of text. Counted on added lines, so deleting comments buys no
+    /// room. 0: no limit.
     pub max_added_comment_chars: u64,
+    /// How many source files one change may add. 0: no limit.
+    pub max_added_files: usize,
+    /// How long the path of an added file may be, from the project directory.
+    pub max_path_length: usize,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Limits { max_open_prs: 4, max_added_comment_chars: 5000 }
+        Limits { max_open_prs: 4, max_added_comment_chars: 12000, max_added_files: 10, max_path_length: 80 }
     }
 }
 
@@ -628,6 +634,7 @@ mod tests {
         assert!(c.search_rule().is_empty());
         assert!(c.reviewer_bullets().contains("default proof"));
         assert!(c.local_rule().starts_with("Do not add"));
+        assert!(c.local_rule().contains("`@[simp]`") && Conduct::default().search_rule().contains("`grind?`"));
         c.local_automation.enabled = true;
         assert!(c.local_rule().contains("at least 3 times in `simp`"));
         assert!(c.reviewer_bullets().contains("outside its conditions"));

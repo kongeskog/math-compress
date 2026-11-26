@@ -92,16 +92,25 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
             .chain([
                 format!("More lines longer than {} characters than there are today.", cfg.score.max_line_length),
                 format!(
-                    "Any line you add or edit that is longer than {} characters or ends in whitespace (an edited line counts as added, also where the old line was too long).",
+                    "Any line you add or edit that is longer than {} characters, ends in whitespace, or holds a control character or one that does not show (an edited line counts as added, also where the old line was too long).",
                     cfg.score.max_line_length
                 ),
                 "A comment or doc comment that still names a declaration you deleted.".to_string(),
                 match cfg.limits.max_added_comment_chars {
-                    0 => "A link (`http://`, `https://`, `www.`) in a comment or string you add.".to_string(),
+                    0 => "A link (`https://…`, any `scheme://`, or `www.`) on a line you add, in a comment, a string or a name.".to_string(),
                     max => format!(
-                        "More than {max} characters of comments and string literals added by one change, net over all its files, or a link (`http://`, `https://`, `www.`) in a comment or string you add."
+                        "More than {max} characters of comments, string literals and names in `«…»` on the lines one change adds (an edited line counts in full; a moved one does not), or a link (`https://…`, any `scheme://`, or `www.`) on a line you add."
                     ),
                 },
+                "A string, a comment or a name in `«…»` that is not closed, and a string or such a name that runs over a line break (no string gaps): what is counted must be what Lean reads.".to_string(),
+                format!(
+                    "An added file without code, {}a path of an added file that is longer than {} characters or holds anything but ASCII letters, digits, `_`, `/` and `.`.",
+                    match cfg.limits.max_added_files {
+                        0 => String::new(),
+                        n => format!("more than {n} added files in one change, "),
+                    },
+                    cfg.limits.max_path_length
+                ),
             ]),
     );
     let review = &cfg.review;

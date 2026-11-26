@@ -75,11 +75,17 @@ min_account_age_days = 30
 
 [limits]
 max_open_prs = 4
-# Comments and string literals do not count toward the score, so a change
-# could carry any amount of text. One change may add at most this many
-# characters of them, net over all its files; a link in an added comment or
-# string is never allowed. 0 turns the limit (not the rule on links) off.
-max_added_comment_chars = 5000
+# Comments, string literals and names in «…» do not count toward the score, so
+# a change could carry any amount of text. The lines one change adds may hold
+# at most this many characters of them, over all its files (an edited line
+# counts in full, a moved one does not; the largest in the first arena's
+# record was 11,551). 0 turns the limit off. A link on an added line is never
+# allowed.
+max_added_comment_chars = 12000
+# How many files one change may add (0: no limit), and how long the path of an
+# added file may be. Paths hold only ASCII letters, digits, `_`, `/` and `.`.
+max_added_files = 10
+max_path_length = 80
 
 # Decide this before the first change: is the goal the shortest proof of the
 # final theorems, or a shorter proof that still mirrors a paper statement by

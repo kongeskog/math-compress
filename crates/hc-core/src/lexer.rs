@@ -5,7 +5,16 @@
 //!
 //! * `--` line comments and nested `/- ... -/` block comments (including doc
 //!   comments) are removed and never counted.
-//! * A string literal is one token. A character literal is one token.
+//! * A string literal is one token, a raw string (`r"…"`, `r#"…"#` with any
+//!   number of `#`, in which a backslash is an ordinary character) included.
+//!   An interpolated string (`s!"…{e}…"`, also `f!` and `m!`) is one token
+//!   for each piece of text, up to and including the `{` that opens a hole
+//!   and from the `}` that closes it; what stands in a hole is tokenized as
+//!   code. A character literal is one token.
+//! * A string or a block comment that is not closed runs to the end of the
+//!   file. That, and a string with a line break in it, is reported by
+//!   [`problems`]; a gate refuses both, so that what is counted here and
+//!   what Lean reads cannot drift apart over more than a line.
 //! * An identifier is a run of letters, digits, `_`, `'`, `!`, `?`; a `.`
 //!   followed by an identifier start continues it, so `Foo.bar` is one token.
 //! * A number is one token (`12`, `1.5`, `0xFF`).
@@ -48,21 +57,74 @@ pub struct Comment {
     pub line: usize,
 }
 
+/// Something in a file that the tokenizer and Lean may read differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Problem {
+    /// A string literal that is not closed before the end of the file.
+    OpenString,
+    /// A block comment that is not closed before the end of the file.
+    OpenComment,
+    /// A string literal with a line break in it.
+    StringOverLines,
+    /// A name in `«…»` with a line break in it, or not closed.
+    NameOverLines,
+}
+
+struct Lexed {
+    tokens: Vec<Token>,
+    comments: Vec<Comment>,
+    problems: Vec<(usize, Problem)>,
+}
+
 /// Tokenize `src`, dropping comments and whitespace.
 pub fn tokenize(src: &str) -> Vec<Token> {
-    scan(src).0
+    lex(src).tokens
 }
 
 /// The tokens of `src` and, separately, its comments. The tokens are exactly
 /// those of [`tokenize`]; the comments are for checks that read what the
 /// score does not count.
 pub fn scan(src: &str) -> (Vec<Token>, Vec<Comment>) {
+    let l = lex(src);
+    (l.tokens, l.comments)
+}
+
+/// Where `src` has an unclosed string or block comment, or a string that
+/// runs over a line break: (1-based line where it starts, what).
+pub fn problems(src: &str) -> Vec<(usize, Problem)> {
+    lex(src).problems
+}
+
+/// Whether a token is a string literal or a piece of an interpolated one.
+pub fn is_string(t: &Token) -> bool {
+    let s = t.text.as_str();
+    s.starts_with('"') || (s.starts_with('}') && s.len() > 1) || is_raw_string(s)
+}
+
+fn is_raw_string(s: &str) -> bool {
+    s.strip_prefix('r').is_some_and(|rest| rest.trim_start_matches('#').starts_with('"'))
+}
+
+/// If a raw string starts at `i` (`r`, any number of `#`, `"`), the number of `#`.
+fn raw_string_start(chars: &[char], i: usize) -> Option<usize> {
+    if chars[i] != 'r' {
+        return None;
+    }
+    let hashes = chars[i + 1..].iter().take_while(|c| **c == '#').count();
+    (chars.get(i + 1 + hashes) == Some(&'"')).then_some(hashes)
+}
+
+fn lex(src: &str) -> Lexed {
     let chars: Vec<char> = src.chars().collect();
     let n = chars.len();
-    let mut out = Vec::new();
+    let mut out: Vec<Token> = Vec::new();
     let mut comments = Vec::new();
+    let mut problems = Vec::new();
     let mut i = 0;
     let mut line = 1;
+    // The holes of interpolated strings that are open, innermost last: for
+    // each, how many `{` inside it are open.
+    let mut holes: Vec<usize> = Vec::new();
 
     while i < n {
         let c = chars[i];
@@ -103,24 +165,74 @@ pub fn scan(src: &str) -> (Vec<Token>, Vec<Comment>) {
                     i += 1;
                 }
             }
+            if depth > 0 {
+                problems.push((start_line, Problem::OpenComment));
+            }
             comments.push(Comment { text: chars[start..i].iter().collect(), line: start_line });
             continue;
         }
         let start = i;
         let start_line = line;
-        // String literal.
-        if c == '"' {
+        // A piece of an interpolated string: after `s!`, `f!` or `m!`, or
+        // after the `}` that closes a hole.
+        let resumes = c == '}' && holes.last() == Some(&0);
+        let interpolated =
+            resumes || (c == '"' && out.last().is_some_and(|t| matches!(t.text.as_str(), "s!" | "f!" | "m!")));
+        if interpolated || c == '"' {
+            if resumes {
+                holes.pop();
+            }
             i += 1;
-            while i < n && chars[i] != '"' {
-                if chars[i] == '\\' && i + 1 < n {
-                    i += 1;
+            let mut closed = false;
+            while i < n {
+                match chars[i] {
+                    '"' => {
+                        closed = true;
+                        i += 1;
+                        break;
+                    }
+                    '{' if interpolated => {
+                        closed = true;
+                        holes.push(0);
+                        i += 1;
+                        break;
+                    }
+                    '\\' if i + 1 < n => {
+                        // An escape; a backslash before a line break is a gap.
+                        if chars[i + 1] == '\n' {
+                            line += 1;
+                        }
+                        i += 2;
+                    }
+                    ch => {
+                        if ch == '\n' {
+                            line += 1;
+                        }
+                        i += 1;
+                    }
+                }
+            }
+            if !closed {
+                problems.push((start_line, Problem::OpenString));
+            }
+        } else if let Some(hashes) = raw_string_start(&chars, i) {
+            // A raw string ends at the first `"` followed by as many `#`.
+            i += hashes + 2;
+            let mut closed = false;
+            while i < n {
+                if chars[i] == '"' && chars[i + 1..].iter().take(hashes).filter(|c| **c == '#').count() == hashes {
+                    closed = true;
+                    i += 1 + hashes;
+                    break;
                 }
                 if chars[i] == '\n' {
                     line += 1;
                 }
                 i += 1;
             }
-            i = (i + 1).min(n);
+            if !closed {
+                problems.push((start_line, Problem::OpenString));
+            }
         } else if c == '\'' && is_char_literal(&chars, i).is_some() {
             i = is_char_literal(&chars, i).unwrap();
         } else if c.is_ascii_digit() {
@@ -136,8 +248,17 @@ pub fn scan(src: &str) -> (Vec<Token>, Vec<Comment>) {
         } else if is_ident_start(c) || c == '«' {
             loop {
                 if i < n && chars[i] == '«' {
-                    while i < n && chars[i] != '»' && chars[i] != '\n' {
+                    // Lean reads on to the closing quote, over line breaks too.
+                    let mut broken = false;
+                    while i < n && chars[i] != '»' {
+                        if chars[i] == '\n' {
+                            line += 1;
+                            broken = true;
+                        }
                         i += 1;
+                    }
+                    if broken || i == n {
+                        problems.push((start_line, Problem::NameOverLines));
                     }
                     i = (i + 1).min(n);
                 } else {
@@ -153,14 +274,22 @@ pub fn scan(src: &str) -> (Vec<Token>, Vec<Comment>) {
                 }
             }
         } else if is_single(c) {
+            if let Some(depth) = holes.last_mut() {
+                match c {
+                    '{' => *depth += 1,
+                    '}' => *depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+            }
             i += 1;
         } else if is_ascii_op(c) {
             while i < n && is_ascii_op(chars[i]) {
-                // Never swallow the start of a comment.
+                // Never swallow the start of a comment or of a character literal.
                 if i > start
                     && i + 1 < n
                     && ((chars[i] == '-' && chars[i + 1] == '-')
-                        || (chars[i] == '/' && chars[i + 1] == '-'))
+                        || (chars[i] == '/' && chars[i + 1] == '-')
+                        || (chars[i] == '\'' && is_char_literal(&chars, i).is_some()))
                 {
                     break;
                 }
@@ -169,9 +298,13 @@ pub fn scan(src: &str) -> (Vec<Token>, Vec<Comment>) {
         } else {
             i += 1;
         }
-        out.push(Token { text: chars[start..i].iter().collect(), line: start_line });
+        let text: String = chars[start..i].iter().collect();
+        if text.contains('\n') && (interpolated || c == '"' || raw_string_start(&chars, start).is_some()) {
+            problems.push((start_line, Problem::StringOverLines));
+        }
+        out.push(Token { text, line: start_line });
     }
-    (out, comments)
+    Lexed { tokens: out, comments, problems }
 }
 
 /// If a character literal starts at `i`, return the index just past it.
@@ -250,6 +383,69 @@ mod tests {
         assert_eq!(tokens, tokenize(src));
         let got: Vec<(usize, &str)> = comments.iter().map(|c| (c.line, c.text.as_str())).collect();
         assert_eq!(got, [(1, "-- b c"), (2, "/-- doc\n  more -/"), (4, "/- open")]);
+    }
+
+    /// Each case was compiled with Lean 4 to see what it reads.
+    #[test]
+    fn raw_strings_do_not_take_a_backslash_for_an_escape() {
+        // The reported case: with `\"` read as an escape, the string ran on to
+        // the next quote and the code between was one token.
+        let src = "def qa := r\"\\\"\ntheorem big : a = c := by\n  grind\ndef qb := \"\\\\\"\ntheorem last : True := trivial\n";
+        assert_eq!(
+            texts(src),
+            ["def", "qa", ":=", "r\"\\\"", "theorem", "big", ":", "a", "=", "c", ":=", "by", "grind", "def", "qb", ":=", "\"\\\\\"", "theorem", "last", ":", "True", ":=", "trivial"]
+        );
+        assert!(problems(src).is_empty());
+        assert_eq!(texts(r###"x r#"a "q" \ b"# y r##"a "# c"## z"###), ["x", "r#\"a \"q\" \\ b\"#", "y", "r##\"a \"# c\"##", "z"]);
+        // `r` is an ordinary name when no quote follows at once, and a name
+        // that ends in `r` starts no raw string.
+        assert_eq!(texts(r##"r #"x"# r + 1"##), ["r", "#", "\"x\"", "#", "r", "+", "1"]);
+        assert_eq!(texts(r#"bar"\"" z"#), ["bar", "\"\\\"\"", "z"]);
+        assert!(tokenize(src).iter().filter(|t| is_string(t)).count() == 2);
+    }
+
+    #[test]
+    fn interpolated_strings_have_code_in_their_holes() {
+        // A hole may hold a quote character or a raw string; read as part of
+        // one string, either would shift every quote after it.
+        assert_eq!(texts(r#"s!"a {n} b" c"#), ["s!", "\"a {", "n", "} b\"", "c"]);
+        assert_eq!(texts(r#"s!"a {'"'} b" grind "x""#), ["s!", "\"a {", "'\"'", "} b\"", "grind", "\"x\""]);
+        assert_eq!(texts(r#"s!"a {r"\"} b" grind"#), ["s!", "\"a {", "r\"\\\"", "} b\"", "grind"]);
+        assert_eq!(
+            texts(r#"m!"x {s!"y {n}"} z {f {a := 1}} w" t"#),
+            ["m!", "\"x {", "s!", "\"y {", "n", "}\"", "} z {", "f", "{", "a", ":=", "1", "}", "} w\"", "t"]
+        );
+        assert_eq!(texts(r#"s!"brace \{ no hole } {n}" t"#), ["s!", "\"brace \\{ no hole } {", "n", "}\"", "t"]);
+        // Braces in a string that is not interpolated are text.
+        assert_eq!(texts(r#"f "a {'"'} b" grind"#), ["f", "\"a {'\"", "'", "}", "b", "\" grind"]);
+        let pieces = tokenize(r#"s!"a {n} b""#);
+        assert!(is_string(&pieces[1]) && !is_string(&pieces[2]) && is_string(&pieces[3]));
+    }
+
+    #[test]
+    fn character_literals_and_other_forms() {
+        assert_eq!(texts(r#"'"' x '\'' y '\\' z '\x41' w"#), ["'\"'", "x", "'\\''", "y", "'\\\\'", "z", "'\\x41'", "w"]);
+        // Straight after an operator, too.
+        assert_eq!(texts(r#"c ='"' ∧ d"#), ["c", "=", "'\"'", "∧", "d"]);
+        assert_eq!(texts("f '' s"), ["f", "''", "s"]);
+        assert_eq!(texts("«weird -- name \"q» x"), ["«weird -- name \"q»", "x"]);
+        assert_eq!(texts("\"\\x41\\u1F60\\n\\\\\\\"\" x"), ["\"\\x41\\u1F60\\n\\\\\\\"\"", "x"]);
+        assert_eq!(texts("a /- c /- nested -/ still -/ + 1"), ["a", "+", "1"]);
+    }
+
+    #[test]
+    fn what_may_be_read_differently_is_reported() {
+        assert!(problems("def a := \"x\" -- c\n/- d -/ def b := r#\"y\"#\n").is_empty());
+        assert_eq!(problems("def a := 1\ndef u := \"open\ndef b := 2\n"), [(2, Problem::OpenString), (2, Problem::StringOverLines)]);
+        assert_eq!(problems("def a := 1\n\n/- open\ndef b := 2\n"), [(3, Problem::OpenComment)]);
+        assert_eq!(problems("def g := \"abc\\\n  def\"\n"), [(1, Problem::StringOverLines)]);
+        assert_eq!(problems("def g := r\"abc\ndef\"\n"), [(1, Problem::StringOverLines)]);
+        assert_eq!(problems("def g := s!\"a {\n n} b\"\n"), []);
+        assert_eq!(problems("def g := r##\"abc\"#\n"), [(1, Problem::OpenString), (1, Problem::StringOverLines)]);
+        assert_eq!(problems("def «a\n\"b» := 1\ndef c := \"x\"\n"), [(1, Problem::NameOverLines)]);
+        assert_eq!(texts("def «a\n\"b» := 1 c"), ["def", "«a\n\"b»", ":=", "1", "c"]);
+        // A gap keeps the line count right for what follows.
+        assert_eq!(tokenize("\"a\\\nb\" x\ny").iter().map(|t| t.line).collect::<Vec<_>>(), [1, 2, 3]);
     }
 
     #[test]

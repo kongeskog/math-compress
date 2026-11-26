@@ -227,6 +227,19 @@ fn list(items: &[String], max: usize) -> String {
     s
 }
 
+/// How many places a gate's detail names before it says "and n more".
+/// `hc precheck` names them all.
+pub const PLACES: usize = 10;
+
+/// As [`list`], for places in the text: when some are left out, says how to see them all.
+fn places(items: &[String], max: usize) -> String {
+    let mut s = list(items, max);
+    if items.len() > max {
+        s.push_str(" (`hc precheck` lists every place)");
+    }
+    s
+}
+
 /// The declarations of `base` that `head` no longer has, by full name.
 pub fn deleted_names(base: &Measurement, head: &Measurement) -> Vec<String> {
     let remaining: BTreeSet<&String> = head.names.values().flatten().chain(&head.frozen_names).collect();
@@ -246,9 +259,11 @@ pub fn deleted_mentions(base: &Measurement, head: &Measurement) -> Vec<checks::H
 }
 
 /// The gates that read the text a change adds and removes: `added_lines`,
-/// `deleted_names`, `conduct`, `comments`. All are repaired by a push.
-fn text_gates(cfg: &Config, base: &Measurement, head: &Measurement, changed: &[String]) -> Vec<Gate> {
+/// `deleted_names`, `conduct`, `comments`. All are repaired by a push. Each
+/// detail names up to `limit` places.
+fn text_gates(cfg: &Config, base: &Measurement, head: &Measurement, changed: &[String], limit: usize) -> Vec<Gate> {
     let empty = String::new();
+    let prefix = cfg.dir_prefix();
     // The measured files that differ, with their text on each side.
     let files: Vec<(&String, &String, Option<&String>)> = changed
         .iter()
@@ -258,11 +273,12 @@ fn text_gates(cfg: &Config, base: &Measurement, head: &Measurement, changed: &[S
     let max = cfg.score.max_line_length;
     let mut long = Vec::new();
     let mut trailing = Vec::new();
+    let mut hidden = Vec::new();
     let mut links = Vec::new();
-    let mut text_growth = 0i64;
+    let mut unread = Vec::new();
+    let mut added_text = 0u64;
     let mut counted = Vec::new();
     for (path, was, now) in &files {
-        text_growth -= checks::free_text_chars(was) as i64;
         let tactics = &cfg.conduct.search_tactics.tactics;
         let now = now.unwrap_or(&empty);
         counted.push(checks::Counted {
@@ -270,17 +286,28 @@ fn text_gates(cfg: &Config, base: &Measurement, head: &Measurement, changed: &[S
             base: checks::automation(was, tactics),
             head: checks::automation(now, tactics),
         });
-        text_growth += checks::free_text_chars(now) as i64;
+        for (line, problem) in lexer::problems(now) {
+            let what = match problem {
+                lexer::Problem::OpenString => "a string that is not closed",
+                lexer::Problem::OpenComment => "a comment that is not closed",
+                lexer::Problem::StringOverLines => "a string over a line break",
+                lexer::Problem::NameOverLines => "a name in `«…»` over a line break",
+            };
+            unread.push(format!("{path}:{line} ({what})"));
+        }
         let free = checks::free_text(now);
         for (n, raw) in checks::added_lines(was, now) {
             for issue in checks::line_issues(&raw, "", max) {
                 match issue {
                     checks::LineIssue::TooLong(len) => long.push(format!("{path}:{n} ({len})")),
                     checks::LineIssue::TrailingSpace => trailing.push(format!("{path}:{n}")),
+                    checks::LineIssue::Hidden(c) => hidden.push(format!("{path}:{n} (U+{:04X})", c as u32)),
                     checks::LineIssue::Break => {}
                 }
             }
-            if free.get(&n).is_some_and(|t| checks::has_link(t)) {
+            added_text += free.get(&n).map(|t| t.chars().count() as u64).unwrap_or(0);
+            // The whole line: a link can stand in a name as well.
+            if checks::has_link(&raw) {
                 links.push(format!("{path}:{n}"));
             }
         }
@@ -297,10 +324,17 @@ fn text_gates(cfg: &Config, base: &Measurement, head: &Measurement, changed: &[S
     // added_lines
     let mut problems = Vec::new();
     if !long.is_empty() {
-        problems.push(format!("{} added line(s) longer than {max} characters: {}", long.len(), list(&long, 5)));
+        problems.push(format!("{} added line(s) longer than {max} characters: {}", long.len(), places(&long, limit)));
     }
     if !trailing.is_empty() {
-        problems.push(format!("{} added line(s) end in whitespace: {}", trailing.len(), list(&trailing, 5)));
+        problems.push(format!("{} added line(s) end in whitespace: {}", trailing.len(), places(&trailing, limit)));
+    }
+    if !hidden.is_empty() {
+        problems.push(format!(
+            "{} added line(s) hold a control character or one that does not show: {}",
+            hidden.len(),
+            places(&hidden, limit)
+        ));
     }
     gates.push(gate("added_lines", problems));
 
@@ -311,7 +345,7 @@ fn text_gates(cfg: &Config, base: &Measurement, head: &Measurement, changed: &[S
             by_name.entry(h.name).or_default().push(format!("{}:{}", h.path, h.line));
         }
     }
-    let named: Vec<String> = by_name.iter().map(|(name, at)| format!("`{name}` ({})", list(at, 3))).collect();
+    let named: Vec<String> = by_name.iter().map(|(name, at)| format!("`{name}` ({})", list(at, limit))).collect();
     gates.push(gate(
         "deleted_names",
         if named.is_empty() {
@@ -320,31 +354,63 @@ fn text_gates(cfg: &Config, base: &Measurement, head: &Measurement, changed: &[S
             vec![format!(
                 "{} deleted declaration(s) are still named in a comment: {}",
                 named.len(),
-                list(&named, 5)
+                places(&named, limit)
             )]
         },
     ));
 
     // conduct
-    gates.push(gate("conduct", checks::conduct_problems(&cfg.conduct, &counted)));
+    gates.push(gate("conduct", checks::conduct_problems(&cfg.conduct, &counted, limit)));
 
-    // comments
+    // comments: the text the score does not count, and the files that carry it.
     let mut problems = Vec::new();
-    let limit = cfg.limits.max_added_comment_chars;
-    if limit > 0 && text_growth > limit as i64 {
+    if !unread.is_empty() {
         problems.push(format!(
-            "comments and string literals grew by {text_growth} characters; one change may add at most {limit}"
+            "{} place(s) where a string, a comment or a quoted name is not closed on its line, so that what is counted may not be what the compiler reads: {}",
+            unread.len(),
+            places(&unread, limit)
+        ));
+    }
+    let max_text = cfg.limits.max_added_comment_chars;
+    if max_text > 0 && added_text > max_text {
+        problems.push(format!(
+            "the added lines hold {added_text} characters of comments, string literals and quoted names; one change may add at most {max_text}"
         ));
     }
     if !links.is_empty() {
+        problems.push(format!("{} added line(s) hold a link: {}", links.len(), places(&links, limit)));
+    }
+    let added_files: Vec<&String> = head.texts.keys().filter(|p| !base.texts.contains_key(*p)).collect();
+    let max_files = cfg.limits.max_added_files;
+    if max_files > 0 && added_files.len() > max_files {
+        problems.push(format!("{} files are added; one change may add at most {max_files}", added_files.len()));
+    }
+    // Why paths are not allowed, with how many each reason holds for. The
+    // paths themselves are not repeated: what is wrong with them may be
+    // exactly the text they carry.
+    let mut bad_paths: BTreeMap<String, usize> = BTreeMap::new();
+    let mut hollow = Vec::new();
+    for path in &added_files {
+        let rel = path.strip_prefix(&prefix).unwrap_or(path);
+        if let Some(why) = checks::path_problem(rel, cfg.limits.max_path_length) {
+            *bad_paths.entry(why).or_default() += 1;
+        } else if head.files.iter().any(|f| &f.path == *path && f.tokens == 0) {
+            hollow.push(path.to_string());
+        }
+    }
+    if !bad_paths.is_empty() {
+        let reasons: Vec<String> = bad_paths.iter().map(|(why, n)| format!("{n}: {why}")).collect();
         problems.push(format!(
-            "{} added line(s) have a link in a comment or a string: {}",
-            links.len(),
-            list(&links, 5)
+            "{} added file(s) with a path that is not allowed ({})",
+            bad_paths.values().sum::<usize>(),
+            reasons.join("; ")
         ));
     }
+    if !hollow.is_empty() {
+        problems.push(format!("{} added file(s) without any code: {}", hollow.len(), list(&hollow, limit)));
+    }
     gates.push(if problems.is_empty() {
-        Gate::new("comments", GateStatus::Pass, format!("comments and string literals {text_growth:+} characters"))
+        Gate::new("comments", GateStatus::Pass, format!("the added lines hold {added_text} characters of comments and strings"))
     } else {
         Gate::new("comments", GateStatus::Fail, problems.join("; "))
     });
@@ -358,6 +424,11 @@ fn text_gates(cfg: &Config, base: &Measurement, head: &Measurement, changed: &[S
 /// lines, `no_increase` rules and their caps); the four after it read the
 /// text the change adds and removes (see `checks`).
 pub fn static_gates(cfg: &Config, base: &Measurement, head: &Measurement) -> Result<Vec<Gate>> {
+    static_gates_naming(cfg, base, head, PLACES)
+}
+
+/// As [`static_gates`], with every detail naming up to `limit` places.
+pub fn static_gates_naming(cfg: &Config, base: &Measurement, head: &Measurement, limit: usize) -> Result<Vec<Gate>> {
     let changed = changed_paths(base, head);
     let frozen = cfg.frozen_set()?;
     let prefix = cfg.dir_prefix();
@@ -466,7 +537,7 @@ pub fn static_gates(cfg: &Config, base: &Measurement, head: &Measurement) -> Res
     } else {
         Gate::new("no_increase", GateStatus::Fail, grew.join("; "))
     });
-    gates.extend(text_gates(cfg, base, head, &changed));
+    gates.extend(text_gates(cfg, base, head, &changed, limit));
 
     // improves
     let key = cfg.score.primary.as_str();
@@ -785,28 +856,169 @@ mod tests {
     }
 
     #[test]
-    fn added_comment_text_is_limited_and_carries_no_links() {
+    fn added_text_is_limited_and_carries_no_links() {
         let base = "-- helper\ntheorem a : True := by\n  trivial\n";
         let mut c = cfg();
         c.limits.max_added_comment_chars = 30;
         let g = judged(&c, base, "-- helper, now direct\ntheorem a : True := trivial\n");
         assert_eq!(status(&g, "comments"), GateStatus::Pass, "{g:?}");
-        let g = judged(&c, base, &format!("-- helper {}\ntheorem a : True := trivial\n", "x".repeat(31)));
+        assert!(detail(&g, "comments").contains("hold 21 characters"), "{g:?}");
+        let g = judged(&c, base, &format!("-- {}\ntheorem a : True := trivial\n", "x".repeat(28)));
         assert_eq!(status(&g, "comments"), GateStatus::Fail);
-        assert!(detail(&g, "comments").contains("grew by 32 characters"), "{g:?}");
-        // Text moved into a string literal is counted the same way.
-        let g = judged(&c, base, &format!("def s := \"{}\"\ntheorem a : True := trivial\n", "x".repeat(40)));
+        assert!(detail(&g, "comments").contains("hold 31 characters"), "{g:?}");
+        // Text in a string literal or a quoted name is counted the same way.
+        let g = judged(&c, base, &format!("def s := \"{}\"\ntheorem a : True := trivial\n", "x".repeat(29)));
+        assert_eq!(status(&g, "comments"), GateStatus::Fail, "{g:?}");
+        let g = judged(&c, base, &format!("theorem «{}» : True := trivial\n", "x".repeat(29)));
         assert_eq!(status(&g, "comments"), GateStatus::Fail, "{g:?}");
         c.limits.max_added_comment_chars = 0;
         let g = judged(&c, base, &format!("-- helper {}\ntheorem a : True := trivial\n", "x".repeat(31)));
         assert_eq!(status(&g, "comments"), GateStatus::Pass, "0 turns the limit off");
-        // A link in an added comment, with any limit; one that was there may stay.
+        // A link on an added line, with any limit; one that was there may stay.
         let g = judged(&c, base, "-- see https://example.org\ntheorem a : True := trivial\n");
         assert_eq!(status(&g, "comments"), GateStatus::Fail);
         assert!(detail(&g, "comments").contains("proj/A.lean:1"), "{g:?}");
         let with_link = "-- see www.example.org\ntheorem a : True := by\n  trivial\n";
         let g = judged(&c, with_link, "-- see www.example.org\ntheorem a : True := trivial\n");
         assert_eq!(status(&g, "comments"), GateStatus::Pass, "{g:?}");
+    }
+
+    /// The reported case: 200 lines of comments deleted, 250 other lines of
+    /// comments added. The net growth was small; what is added is what counts.
+    #[test]
+    fn deleting_comments_buys_no_room_for_new_ones() {
+        let old = format!("-- {}\n", "o".repeat(30)).repeat(200);
+        let new = format!("-- {}\n", "SPAM ".repeat(6)).repeat(250);
+        let code = "theorem a : True := by\n  trivial\ntheorem b : True := a\n";
+        let mut c = cfg();
+        c.score.guards.clear();
+        c.limits.max_added_comment_chars = 6000;
+        let g = judged(&c, &format!("{old}{code}"), &format!("{new}theorem a : True := trivial\n"));
+        assert_eq!(status(&g, "comments"), GateStatus::Fail);
+        assert!(detail(&g, "comments").contains("hold 8250 characters"), "{g:?}");
+        // The same comments moved to another place in the file are not added.
+        let g = judged(&c, &format!("{old}{code}"), &format!("theorem a : True := trivial\n{old}"));
+        assert_eq!(status(&g, "comments"), GateStatus::Pass, "{g:?}");
+    }
+
+    /// The reported case: a raw string whose backslash was read as an escape
+    /// hid two theorems from the score and a search tactic from the count.
+    #[test]
+    fn code_cannot_hide_behind_a_raw_string() {
+        let body = "theorem big (a b c : Nat) (h : a = b) (h2 : b = c) : a = c := by\n  grind\ntheorem big2 (a b c : Nat) (h : a = b) (h2 : b = c) : a = c := by\n  grind\n";
+        let base = "theorem last : True := trivial\n";
+        let head = format!("def qa := r\"\\\"\n{body}def qb := \"\\\\\"\ntheorem last : True := trivial\n");
+        let mut c = cfg();
+        c.score.guards.clear();
+        let g = judged(&c, base, &head);
+        assert_eq!(status(&g, "improves"), GateStatus::Fail, "the theorems are counted: {g:?}");
+        assert!(detail(&g, "improves").contains("tokens went from 6 to 74"), "{g:?}");
+        assert_eq!(status(&g, "conduct"), GateStatus::Fail, "and so are the calls of grind");
+    }
+
+    #[test]
+    fn what_the_compiler_may_read_differently_is_refused() {
+        let base = "theorem a : True := by\n  trivial\ntheorem b : True := a\n";
+        for (head, what) in [
+            ("def s := \"abc\\\n  def\"\ntheorem a : True := trivial\n", "a string over a line break"),
+            ("theorem a : True := trivial\ndef s := \"open\n", "a string that is not closed"),
+            ("theorem a : True := trivial\n/- open\n", "a comment that is not closed"),
+            ("def «a\nb» := 1\ntheorem a : True := trivial\n", "a name in `«…»` over a line break"),
+        ] {
+            let g = judged(&cfg(), base, head);
+            assert_eq!(status(&g, "comments"), GateStatus::Fail, "{head}");
+            assert!(detail(&g, "comments").contains(what), "{head}: {g:?}");
+        }
+        // The reported case: a link split over a string gap.
+        let g = judged(&cfg(), base, "def s := \"https:\\\n   //evil.example\"\n");
+        assert_eq!(status(&g, "comments"), GateStatus::Fail);
+    }
+
+    /// The reported cases of links and of whitespace that a reader does not see.
+    #[test]
+    fn links_and_hidden_characters_on_added_lines() {
+        let base = "theorem a : True := by\n  trivial\ntheorem b : True := a\n";
+        // A link in a quoted name, which is one token of any length.
+        let g = judged(&cfg(), base, "theorem «see https://evil.example/buy now» : True := trivial\n");
+        assert_eq!(status(&g, "comments"), GateStatus::Fail);
+        assert!(detail(&g, "comments").contains("1 added line(s) hold a link: proj/A.lean:1"), "{g:?}");
+        for (label, head, gate) in [
+            ("no-break space", "theorem a : True := trivial\u{a0}\n", "added_lines"),
+            ("carriage return inside", "theorem a : True := trivial -- x\rhidden\n", "added_lines"),
+            ("form feed", "theorem a : True := trivial\u{c}\n", "added_lines"),
+            ("carriage return and line feed", "theorem a : True := trivial\r\n", "added_lines"),
+            ("another scheme", "theorem a : True := trivial -- ftp://evil.example/buy\n", "comments"),
+            ("zero-width space", "theorem a : True := trivial -- https:/\u{200b}/evil.example\n", "comments"),
+            ("zero-width space", "theorem a : True := trivial -- https:/\u{200b}/evil.example\n", "added_lines"),
+        ] {
+            let g = judged(&cfg(), base, head);
+            assert_eq!(status(&g, gate), GateStatus::Fail, "{label}: {g:?}");
+        }
+        // Not looked for: a bare domain name.
+        let g = judged(&cfg(), base, "theorem a : True := trivial -- evil.example/buy\n");
+        assert_eq!(status(&g, "comments"), GateStatus::Pass);
+    }
+
+    /// The reported case: fifty empty files whose names carry the text.
+    #[test]
+    fn added_files_are_few_not_empty_and_plainly_named() {
+        let c = cfg();
+        let code = "theorem a : True := by\n  trivial\ntheorem b : True := a\n";
+        let short = "theorem a : True := trivial\n";
+        let run = |files: &[(String, String)]| {
+            let base = checkout(&[("proj/A.lean", code)]);
+            let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+            let head = checkout(&refs);
+            static_gates(&c, &measure(&base, &c).unwrap(), &measure(&head, &c).unwrap()).unwrap()
+        };
+        let with = |extra: Vec<(String, String)>| {
+            let mut files = vec![("proj/A.lean".to_string(), short.to_string())];
+            files.extend(extra);
+            run(&files)
+        };
+        let mut spam = Vec::new();
+        for i in 0..50 {
+            spam.push((format!("proj/Buy cheap things at www.evil.example now {i} {}.lean", "x".repeat(150)), String::new()));
+        }
+        let g = with(spam);
+        assert_eq!(status(&g, "comments"), GateStatus::Fail);
+        let d = detail(&g, "comments");
+        assert!(d.contains("50 files are added; one change may add at most 10"), "{d}");
+        assert!(d.contains("50 added file(s) with a path that is not allowed"), "{d}");
+        assert!(!d.contains("evil.example") && !d.contains("Buy cheap"), "the text is not passed on: {d}");
+
+        let g = with(vec![("proj/Empty.lean".into(), "-- nothing but a comment\n".into())]);
+        assert!(detail(&g, "comments").contains("1 added file(s) without any code: proj/Empty.lean"), "{g:?}");
+        let g = with(vec![("proj/New_part.lean".into(), "theorem n : True := trivial\n".into())]);
+        assert_eq!(status(&g, "comments"), GateStatus::Pass, "{g:?}");
+        let g = with(vec![("proj/new-part.lean".into(), "theorem n : True := trivial\n".into())]);
+        assert!(detail(&g, "comments").contains("1 added file(s) with a path that is not allowed (1: a path may hold only ASCII letters"), "{g:?}");
+        let g = with(vec![(format!("proj/{}.lean", "N".repeat(80)), "theorem n : True := trivial\n".into())]);
+        assert!(detail(&g, "comments").contains("at most 80 characters"), "{g:?}");
+    }
+
+    #[test]
+    fn a_detail_names_ten_places_and_says_where_the_rest_are() {
+        let base = "theorem a : True := by\n  trivial\n";
+        let head: String = (0..12).map(|i| format!("theorem a{i} : True := trivial \n")).collect();
+        let c = cfg();
+        let b = measure(&checkout(&[("proj/A.lean", base)]), &c).unwrap();
+        let h = measure(&checkout(&[("proj/A.lean", &head)]), &c).unwrap();
+        let d = detail(&static_gates(&c, &b, &h).unwrap(), "added_lines");
+        assert!(d.contains("proj/A.lean:10 and 2 more (`hc precheck` lists every place)"), "{d}");
+        let d = detail(&static_gates_naming(&c, &b, &h, usize::MAX).unwrap(), "added_lines");
+        assert!(d.contains("proj/A.lean:12") && !d.contains("more"), "{d}");
+    }
+
+    /// The reported case: `two_mul` deleted from the project, the library's
+    /// `two_mul` used in its place, and the doc comment still says `two_mul`.
+    #[test]
+    fn a_comment_may_name_what_the_code_beside_it_still_uses() {
+        let base = "namespace A\ntheorem two_mul (n : Nat) : 2 * n = n + n := by omega\n/-- Uses `two_mul`. -/\ntheorem t (n : Nat) : 2 * n = n + n := two_mul n\nend A\n";
+        let head = "namespace A\n/-- Uses `two_mul`. -/\ntheorem t (n : Nat) : 2 * n = n + n := two_mul n\nend A\n";
+        assert_eq!(status(&judged(&cfg(), base, head), "deleted_names"), GateStatus::Pass);
+        let head = "namespace A\n/-- Uses `two_mul`. -/\ntheorem t (n : Nat) : 2 * n = n + n := by omega\nend A\n";
+        assert_eq!(status(&judged(&cfg(), base, head), "deleted_names"), GateStatus::Fail);
     }
 
     #[test]
