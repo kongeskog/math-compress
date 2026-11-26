@@ -4,7 +4,7 @@ import { Empty, Page } from "~/components/Page";
 import { Badge } from "~/components/ui/badge";
 import { Card, CardHeader, CardTitle } from "~/components/ui/card";
 import { store } from "~/lib/data";
-import { ago, num } from "~/lib/format";
+import { ago, num, pct } from "~/lib/format";
 import type { Member, Role } from "~/lib/types";
 
 const GROUPS: { role: Role; title: string; note: string; empty: string }[] = [
@@ -40,6 +40,10 @@ export default function People() {
     (store.roles()?.applications ?? []).filter((a) => a.status === "open"),
   );
   const rr = () => store.rules()?.roles;
+  const board = createMemo(() => [...(store.state()?.leaderboard ?? [])].sort((a, b) => b.saved - a.saved));
+  const total = createMemo(() => board().reduce((n, l) => n + l.saved, 0));
+  const rolesOf = (login: string) =>
+    (store.roles()?.members ?? []).filter((m) => m.login === login).map((m) => m.role);
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
   return (
@@ -47,6 +51,61 @@ export default function People() {
       title="People"
       subtitle="Anyone can contribute changes. Reviewing, and putting ideas straight into the queue, are earned: the leaders vet each person on their record."
     >
+      <Card class="mb-6 overflow-hidden">
+        <CardHeader>
+          <CardTitle>
+            Contributors <span class="font-normal text-faint tnum">{board().length}</span>
+          </CardTitle>
+          <span class="text-xs text-faint">everyone with a change, by tokens saved</span>
+        </CardHeader>
+        <Show when={board().length} fallback={<Empty>Nobody has opened a change yet.</Empty>}>
+          <ol class="divide-y divide-border">
+            <For each={board()}>
+              {(l, i) => (
+                <li class="flex items-center gap-3 px-5 py-3 text-sm">
+                  <span class="w-5 shrink-0 font-mono text-xs text-faint tnum">{i() + 1}</span>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2">
+                      <a
+                        href={`https://github.com/${l.login}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        class="min-w-0 truncate hover:underline"
+                      >
+                        @{l.login}
+                      </a>
+                      <For each={rolesOf(l.login)}>{(r) => <Badge variant="outline">{r}</Badge>}</For>
+                    </div>
+                    <div class="mt-0.5 text-xs text-muted-foreground tnum sm:hidden">
+                      {plural(l.merged, "merged change")} of {l.attempts} ·{" "}
+                      {pct((100 * l.saved) / Math.max(1, total()), 1)}
+                    </div>
+                  </div>
+                  <a
+                    href={`${store.repoUrl()}/pulls?q=is%3Apr+is%3Amerged+author%3A${l.login}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    class="hidden shrink-0 text-xs text-muted-foreground hover:text-foreground tnum sm:block"
+                  >
+                    {plural(l.merged, "merged change")} of {l.attempts}
+                  </a>
+                  <span class="hidden w-28 shrink-0 sm:block" aria-hidden="true">
+                    <span
+                      class="block h-1.5 rounded-full bg-foreground/70"
+                      style={{ width: `${Math.max(2, (100 * l.saved) / Math.max(1, total()))}%` }}
+                    />
+                  </span>
+                  <span class="hidden w-14 shrink-0 text-right text-xs text-faint tnum sm:block">
+                    {pct((100 * l.saved) / Math.max(1, total()), 1)}
+                  </span>
+                  <span class="w-24 shrink-0 text-right font-mono text-good tnum">−{num(l.saved)}</span>
+                </li>
+              )}
+            </For>
+          </ol>
+        </Show>
+      </Card>
+
       <div class="grid gap-6 lg:grid-cols-5">
         <div class="flex flex-col gap-6 lg:col-span-3">
           <For each={GROUPS}>
