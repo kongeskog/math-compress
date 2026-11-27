@@ -178,7 +178,7 @@
       "label": "Automation within the stated limits"
     },
     {
-      "description": "Comments, string literals and quoted names do not count toward the score, so what the added lines hold of them is limited. No added line and no added path holds a link. Every string and comment is closed, and no string or quoted name runs over a line break, so that what is counted is what the compiler reads. Added files are few, are not empty, and have plain paths.",
+      "description": "Comments, string literals and quoted names do not count toward the score, so what the added lines hold of them is limited. No added line and no added path holds a link. Every string and comment is closed, no string or quoted name runs over a line break, no string other than one after `s!`, `f!` or `m!` holds a `{`, and no comment starts straight after an operator, so that what is counted is what the compiler reads. Added files are few, are not empty, and have plain paths.",
       "key": "comments",
       "label": "Added text within limits"
     },

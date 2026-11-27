@@ -292,6 +292,8 @@ fn text_gates(cfg: &Config, base: &Measurement, head: &Measurement, changed: &[S
                 lexer::Problem::OpenComment => "a comment that is not closed",
                 lexer::Problem::StringOverLines => "a string over a line break",
                 lexer::Problem::NameOverLines => "a name in `«…»` over a line break",
+                lexer::Problem::BraceInString => "a `{` in a string that does not follow `s!`, `f!` or `m!`",
+                lexer::Problem::GluedComment => "a comment straight after an operator",
             };
             unread.push(format!("{path}:{line} ({what})"));
         }
@@ -366,7 +368,7 @@ fn text_gates(cfg: &Config, base: &Measurement, head: &Measurement, changed: &[S
     let mut problems = Vec::new();
     if !unread.is_empty() {
         problems.push(format!(
-            "{} place(s) where a string, a comment or a quoted name is not closed on its line, so that what is counted may not be what the compiler reads: {}",
+            "{} place(s) where what is counted may not be what the compiler reads (a string, a comment or a quoted name not closed on its line, a `{{` in a plain string that some syntax reads as a hole, a comment with no space after an operator): {}",
             unread.len(),
             places(&unread, limit)
         ));
@@ -924,6 +926,10 @@ mod tests {
             ("theorem a : True := trivial\ndef s := \"open\n", "a string that is not closed"),
             ("theorem a : True := trivial\n/- open\n", "a comment that is not closed"),
             ("def «a\nb» := 1\ntheorem a : True := trivial\n", "a name in `«…»` over a line break"),
+            // Lean reads `n + 1` here as code.
+            ("theorem a : True := trivial\ndef f (n : Nat) : IO Unit := println! \"{n + 1}\"\n", "a `{` in a string"),
+            // With a notation `+-`, Lean reads the rest of the line as code.
+            ("theorem a (n : Nat) : n = n +-- 1\n  0 := rfl\n", "a comment straight after an operator"),
         ] {
             let g = judged(&cfg(), base, head);
             assert_eq!(status(&g, "comments"), GateStatus::Fail, "{head}");

@@ -102,7 +102,7 @@ pub fn prompt(template: &str, cfg: &Config, site: &str) -> String {
                         "More than {max} characters of comments, string literals and names in `«…»` on the lines one change adds (an edited line counts in full; a moved one does not), or a link (`https://…`, any `scheme://`, or `www.`) on a line you add."
                     ),
                 },
-                "A string, a comment or a name in `«…»` that is not closed, and a string or such a name that runs over a line break (no string gaps): what is counted must be what Lean reads.".to_string(),
+                "A string, a comment or a name in `«…»` that is not closed, and a string or such a name that runs over a line break (no string gaps): what is counted must be what Lean reads. For the same reason, a `{` in a string that does not follow `s!`, `f!` or `m!` (`throwError`, `println!` and the like read a hole there), and a comment with no space between it and an operator before it (`a +-- c`).".to_string(),
                 format!(
                     "An added file without code, {}a path of an added file that is longer than {} characters or holds anything but ASCII letters, digits, `_`, `/` and `.`.",
                     match cfg.limits.max_added_files {
