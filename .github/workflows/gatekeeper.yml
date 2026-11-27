@@ -54,10 +54,16 @@ jobs:
 
       - uses: kongeskog/math-compress/.github/actions/setup-hc@main
 
+      # `hc gate` stops with an error when the tip of the data branch is not
+      # the gatekeeper's own commit. The step must fail then, so that nothing
+      # below publishes on top of that tip: without `pipefail` the exit code
+      # of a pipeline is that of `tee`.
       - name: Reconcile
         env:
           GH_TOKEN: ${{ github.token }}
-        run: hc gate --root main --data data | tee -a "$GITHUB_STEP_SUMMARY"
+        run: |
+          set -euo pipefail
+          hc gate --root main --data data | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Timings of pull requests, reviews and verification runs for the
       # dashboard's operations page. Read-only, and never allowed to fail the pass.
@@ -70,9 +76,24 @@ jobs:
       - name: Publish dashboard data
         env:
           DATA_BRANCH: ${{ inputs.data-branch }}
+          # The name this workflow comments and commits under: that of the
+          # Actions token. `hc gate` believes the data branch only while its
+          # last commit was authored and committed under this name.
+          BOT: github-actions[bot]
         run: |
           set -euo pipefail
           cd data
+          # Never commit on top of a commit that is not this workflow's own:
+          # the next pass would take everything under it for the
+          # gatekeeper's. (`hc gate` has refused already; this holds also if
+          # that step is ever changed.)
+          if git rev-parse -q --verify HEAD >/dev/null; then
+            tip="$(git log -1 --format='%an%x09%cn')"
+            if [ "$tip" != "$(printf '%s\t%s' "$BOT" "$BOT")" ]; then
+              echo "::error::The data branch is at a commit by '$tip', not by '$BOT'. Nothing is published."
+              exit 1
+            fi
+          fi
           git add -A
           if git diff --cached --quiet; then
             echo "no change"
@@ -86,6 +107,6 @@ jobs:
             echo "only the timestamp changed"
             exit 0
           fi
-          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+          git -c user.name="$BOT" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit --quiet -m "Update hillclimb data"
           git push --quiet origin "HEAD:$DATA_BRANCH"

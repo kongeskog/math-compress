@@ -986,7 +986,53 @@ mod tests {
         assert!(why.contains("written by `mallory`") && why.contains("not by the gatekeeper"), "{why}");
         // Under another identity the gatekeeper names itself.
         assert_eq!(foreign_data_tip(&dir, "mallory"), None);
+
+        // `hc gate` itself stops there, before it reads or changes anything:
+        // no roles, no ledger, no forge. (With the check taken out of
+        // `gate`, this pass would go on to ask the forge about `o/r`.)
+        let root = dir.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("hillclimb.toml"), "[project]\nslug = \"t\"\ntitle = \"T\"\nrepo = \"o/r\"\ndir = \"proj\"\n").unwrap();
+        let before = std::fs::read_dir(&dir).unwrap().count();
+        let err = gate(&root, &dir, true).unwrap_err().to_string();
+        assert!(err.contains("the data branch is at commit") && err.contains("nothing was done"), "{err}");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), before, "nothing was written beside the data");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The workflow that runs `hc gate` must fail when it fails, and must
+    /// not publish on top of a commit that is not its own. Both were wrong
+    /// once: the step piped into `tee` without `pipefail`.
+    #[test]
+    fn the_workflows_do_not_swallow_a_failed_step() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut seen = 0;
+        for dir in [".github/workflows", "arena/.github/workflows"] {
+            for entry in std::fs::read_dir(root.join(dir)).unwrap() {
+                let path = entry.unwrap().path();
+                let text = std::fs::read_to_string(&path).unwrap();
+                // Each `run:` script, up to the next step.
+                for script in text.split("\n      - ").filter(|s| s.contains("run:")) {
+                    let body = &script[script.find("run:").unwrap()..];
+                    if body.contains("| tee") {
+                        seen += 1;
+                        // Either the shell fails the pipeline, or the step reads the first command's status itself.
+                        assert!(
+                            body.contains("pipefail") || body.contains("PIPESTATUS[0]"),
+                            "{}: a step pipes into tee and does not see the first command fail:\n{body}",
+                            path.display()
+                        );
+                    }
+                }
+            }
+        }
+        assert!(seen >= 4, "the steps that pipe into tee were found ({seen})");
+        let gatekeeper = std::fs::read_to_string(root.join(".github/workflows/gatekeeper.yml")).unwrap();
+        let publish = &gatekeeper[gatekeeper.find("Publish dashboard data").unwrap()..];
+        let (check, commit) = (publish.find("Nothing is published").unwrap(), publish.find("commit --quiet").unwrap());
+        assert!(check < commit, "the tip is checked before anything is committed");
+        // It commits under the one name `hc gate` expects when nothing else is set.
+        assert!(publish.contains("BOT: github-actions[bot]") && publish.contains("user.name=\"$BOT\""));
     }
 
     /// The result an evaluation writes records the minimum it was judged
@@ -1096,7 +1142,7 @@ fn gate(root: &Path, data: &Path, dry_run: bool) -> Result<()> {
                 let _ = hc_core::gate::Forge::create_issue(
                     &mut forge,
                     title,
-                    &format!("Before a pass, {why}. The gatekeeper keeps its roles, its ledger and its record on that branch, so it has stopped: no pass is made and nothing merges until the branch is put back. Leaders: look at that commit and at how it got there (a pull request pointed at the data branch, a push by hand), reset the branch to the last commit by `{}` (`git log --format='%H %an %cn'`), and close this issue. If the gatekeeper runs under another identity, set `HC_BOT_LOGIN`.", gh::bot_login()),
+                    &format!("Before a pass, {why}. The gatekeeper keeps its roles, its ledger and its record on that branch, so it has stopped: no pass is made and nothing merges until the branch is put back. Leaders: look at that commit and at how it got there (a pull request pointed at the data branch, a push by hand), reset the branch to the last commit by `{}` (`git log --format='%H %an %cn'`), and close this issue. If the gatekeeper runs outside the reusable workflow, under another login, `HC_BOT_LOGIN` names it, and its data must be committed under that name.", gh::bot_login()),
                     hc_core::gate::LABEL_ALERT,
                 );
             }

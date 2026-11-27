@@ -215,6 +215,11 @@ pub enum AttemptStatus {
     NeedsFix,
     Merged,
     Rejected,
+    /// A state this version does not know, written by a newer one. Read as
+    /// this instead of failing, so that going back a version does not make
+    /// the state file unreadable (which would start the record anew).
+    #[serde(other)]
+    Unknown,
 }
 
 /// A leader's waiver of the minimum step for one commit.
@@ -398,6 +403,32 @@ pub struct Ledger {
     /// Notices already given on pull requests, so each is given once.
     #[serde(default)]
     pub told: std::collections::BTreeSet<String>,
+    /// Where there is no merge line: the change whose turn it is to be
+    /// verified again, the tree of main its run was started on, and when.
+    #[serde(default)]
+    pub turn: Option<Turn>,
+    /// `pr@head_sha` -> how often main moved under a run of that commit's turn.
+    #[serde(default)]
+    pub turns_voided: BTreeMap<String, u32>,
+    /// `pr@head_sha` -> how often a run of that commit's turn never
+    /// reported, and the tree of main the last such run was started on.
+    #[serde(default)]
+    pub turns_lost: BTreeMap<String, LostRuns>,
+}
+
+/// A turn at being verified again (see [`Ledger::turn`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Turn {
+    /// `pr@head_sha`.
+    pub id: String,
+    pub tree: String,
+    pub at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LostRuns {
+    pub count: u32,
+    pub tree: String,
 }
 
 /// How many records of judged commits the ledger keeps. Records of open pull

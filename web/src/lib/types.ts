@@ -21,7 +21,9 @@ export type AttemptStatus =
   /** a gate failed that the author can fix; open only, never in the attempts log */
   | "needs_fix"
   | "merged"
-  | "rejected";
+  | "rejected"
+  /** a state the gatekeeper's version did not know when it read it back */
+  | "unknown";
 export type Attempt = {
   pr: number;
   title: string;

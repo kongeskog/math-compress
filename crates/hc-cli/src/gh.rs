@@ -249,6 +249,7 @@ impl Forge for GhForge {
                 draft: full["draft"].as_bool().unwrap_or(false),
                 mergeable: full["mergeable"].as_bool(),
                 labels,
+                changed_files: full["changed_files"].as_u64().unwrap_or(0) as usize,
             });
         }
         Ok(out)
@@ -274,6 +275,7 @@ impl Forge for GhForge {
                     draft: false,
                     mergeable: None,
                     labels: Vec::new(),
+                    changed_files: 0,
                 },
                 s(p, "merge_commit_sha"),
                 time(p, "merged_at"),
@@ -537,7 +539,32 @@ impl Forge for GhForge {
             draft: p["draft"].as_bool().unwrap_or(false),
             base_ref: s(&p["base"], "ref"),
             head_sha,
+            title: s(&p, "title"),
+            body: s(&p, "body"),
         })
+    }
+
+    fn closing_issues(&mut self, number: u64) -> Result<Vec<String>> {
+        let (owner, name) = self.repo.split_once('/').ok_or_else(|| anyhow::anyhow!("repository `{}` is not owner/name", self.repo))?;
+        let query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:100){nodes{number repository{nameWithOwner}}}}}}";
+        let text = self.gh(&[
+            "api",
+            "graphql",
+            "-f",
+            &format!("query={query}"),
+            "-f",
+            &format!("owner={owner}"),
+            "-f",
+            &format!("name={name}"),
+            "-F",
+            &format!("number={number}"),
+        ])?;
+        let v: Value = serde_json::from_str(&text)?;
+        closing_issues_of(&v, &self.repo)
+    }
+
+    fn replied(&mut self, issue: u64, marker: &str) -> Result<bool> {
+        Ok(self.issue_comments(issue)?.iter().any(|c| s(c, "body").contains(marker)))
     }
 
     fn merge(&mut self, pr: &PullRequest, message: &str) -> Result<String> {
@@ -588,11 +615,13 @@ impl Forge for GhForge {
     }
 
     fn pr_comments(&mut self, pr: u64) -> Result<Vec<CommentInfo>> {
+        let bot = bot_login();
         Ok(self
             .issue_comments(pr)?
             .iter()
-            .filter(|c| s(&c["user"], "type") != "Bot")
+            .filter(|c| by_a_person(c, &bot))
             .map(|c| CommentInfo {
+                id: c["id"].as_u64().unwrap_or(0),
                 issue: pr,
                 user: s(&c["user"], "login"),
                 body: s(c, "body"),
@@ -622,13 +651,15 @@ impl Forge for GhForge {
             "issues/comments?since={}&sort=created&direction=asc&per_page=100",
             since.format("%Y-%m-%dT%H:%M:%SZ")
         );
+        let bot = bot_login();
         Ok(self
             .list(&path)?
             .iter()
-            .filter(|c| s(&c["user"], "type") != "Bot")
+            .filter(|c| by_a_person(c, &bot))
             .filter_map(|c| {
                 let issue = s(c, "issue_url").rsplit('/').next()?.parse().ok()?;
                 Some(CommentInfo {
+                    id: c["id"].as_u64().unwrap_or(0),
                     issue,
                     user: s(&c["user"], "login"),
                     body: s(c, "body"),
@@ -649,6 +680,36 @@ impl Forge for GhForge {
         self.write("POST", &format!("issues/{issue}/comments"), &[("body", body)])?;
         Ok(())
     }
+}
+
+/// What a `closingIssuesReferences` answer lists, as `#9` for an issue of
+/// `repo` and `owner/name#9` for one elsewhere. An answer without the list
+/// is an error: nothing merges on a question that was not answered.
+fn closing_issues_of(answer: &Value, repo: &str) -> Result<Vec<String>> {
+    let nodes = answer["data"]["repository"]["pullRequest"]["closingIssuesReferences"]["nodes"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("the forge did not say what merging would close"))?;
+    Ok(nodes
+        .iter()
+        .map(|n| {
+            let number = n["number"].as_u64().unwrap_or(0);
+            let of = s(&n["repository"], "nameWithOwner");
+            if of.is_empty() || of.eq_ignore_ascii_case(repo) {
+                format!("#{number}")
+            } else {
+                format!("{of}#{number}")
+            }
+        })
+        .collect())
+}
+
+/// Whether a comment is one for the gatekeeper to read: not a bot's, not
+/// by the login the gatekeeper itself comments under, and not one that
+/// carries the gatekeeper's hidden marker. A gatekeeper run under a
+/// person's login (`HC_BOT_LOGIN`) therefore takes no commands from that
+/// login: it cannot tell its own comments from that person's.
+fn by_a_person(c: &Value, bot: &str) -> bool {
+    s(&c["user"], "type") != "Bot" && !s(&c["user"], "login").eq_ignore_ascii_case(bot) && !s(c, "body").contains(BOT_MARKER)
 }
 
 /// The login under which the gatekeeper comments: that of the Actions token
@@ -678,6 +739,34 @@ fn own_gate_comment<'a>(comments: &'a [Value], login: &str) -> Option<&'a Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_merging_would_close_is_read_from_the_forges_answer() {
+        let answer = serde_json::json!({"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": [
+            {"number": 9, "repository": {"nameWithOwner": "o/r"}},
+            {"number": 3, "repository": {"nameWithOwner": "Other/Repo"}},
+        ]}}}}});
+        assert_eq!(closing_issues_of(&answer, "O/R").unwrap(), ["#9", "Other/Repo#3"]);
+        let none = serde_json::json!({"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": []}}}}});
+        assert!(closing_issues_of(&none, "o/r").unwrap().is_empty());
+        // No list in the answer (an error, a missing pull request) is not "nothing".
+        assert!(closing_issues_of(&serde_json::json!({"data": {"repository": {"pullRequest": null}}}), "o/r").is_err());
+        assert!(closing_issues_of(&serde_json::json!({"errors": [{"message": "x"}]}), "o/r").is_err());
+    }
+
+    #[test]
+    fn the_gatekeepers_own_comments_are_not_read_whatever_account_wrote_them() {
+        let comment = |kind: &str, login: &str, body: &str| serde_json::json!({"user": {"type": kind, "login": login}, "body": body});
+        let bot = "github-actions[bot]";
+        assert!(by_a_person(&comment("User", "lead", "/request-changes"), bot));
+        assert!(!by_a_person(&comment("Bot", "some-app[bot]", "/request-changes"), bot));
+        // The gatekeeper's own login, also where that is an account of type `User`.
+        assert!(!by_a_person(&comment("User", "Arena-Keeper", "/request-changes"), "arena-keeper"));
+        assert!(by_a_person(&comment("User", "lead", "/request-changes"), "arena-keeper"));
+        // And anything that carries its marker.
+        assert!(!by_a_person(&comment("User", "lead", &format!("Blocked by @lead …\n\n{BOT_MARKER}reply 7 -->")), bot));
+        assert!(!by_a_person(&comment("User", "lead", &format!("{COMMENT_MARKER}\n### Hillclimb gate")), bot));
+    }
     use serde_json::json;
 
     #[test]

@@ -51,7 +51,13 @@ guards = [
 # and each key that is left out has that default, so state both. Set
 # `required = 1` to have every change read by a vetted reviewer first, or only
 # `required_large` to have changes of more than `large_change_files` files
-# read. In every setting a `/request-changes` from a leader (or a vetted
+# read. A change in parts (`Depends: #n`) is large as a whole, for each part
+# of one author. An author can get around this by sending a large change as
+# several small ones in turn: it catches large changes, it does not prevent
+# them. Unless `required` is above 0 there is no merge line, for small or
+# large changes: what is green on today's main merges (a large change once
+# approved), and the rest are verified again one at a time, the oldest first.
+# In every setting a `/request-changes` from a leader (or a vetted
 # reviewer) blocks a change until the same person approves its head commit.
 [review]
 required = 0

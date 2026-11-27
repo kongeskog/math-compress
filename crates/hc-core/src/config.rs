@@ -458,7 +458,15 @@ pub struct Review {
     /// Changes touching more files than this need `required_large` approvals.
     pub large_change_files: usize,
     /// Approvals a large change needs. May be above 0 while `required` is 0:
-    /// then only large changes are reviewed.
+    /// then only large changes are reviewed. That is a help for honest
+    /// authors, not a barrier: a large change can be sent as several small
+    /// ones, one after the other, and none of them is reviewed. (A change
+    /// built on unmerged ones counts their files with its own, and one
+    /// that its author has built another on counts that one's; which only
+    /// means the parts must be sent one at a time.) And there is no merge
+    /// line then: small and large changes alike merge when green on
+    /// today's main (a large one once approved) and are otherwise verified
+    /// again by turns, the oldest first. See the README.
     pub required_large: u32,
 }
 
